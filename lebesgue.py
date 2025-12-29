@@ -15,7 +15,7 @@ ax.axvline(1, color='black', linestyle='dashed')
 ax.fill_between(x, y, color='none', edgecolor="#9f9f9f", hatch='....')
 
 #%%
-bins = np.linspace(0, 3, 20)
+bins = np.linspace(0, 3, 6)
 bins
 
 # %%
