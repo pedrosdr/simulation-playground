@@ -225,3 +225,22 @@ plt.legend()
 
 # %%
 plt.imshow(z)
+
+#%%
+import numpy as np
+import pickle as pkl
+
+# z, sizes, means, freqs = pkl.load(open('stats_100.pkl', 'rb'))
+sizes, means, freqs = pkl.load(open('stats_50.pkl', 'rb'))
+
+sizes = np.asarray(sizes)
+sizes = sizes[sizes > 0].astype(int)
+
+n = len(sizes)
+
+# MLE discreto aproximado (Clauset): tau = 1 + n / sum ln(x/(xmin-0.5))
+tau_hat = 1.0 + n / np.sum(np.log(sizes))
+
+print(f"xmin = {1}")
+print(f"n = {n}")
+print(f"tau_MLE = {tau_hat:.6f}")
