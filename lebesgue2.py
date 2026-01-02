@@ -19,12 +19,20 @@ y = 1+np.sin(x)
 plt.plot(x, y)
 
 # %%
+n = 3
 sets = pd.DataFrame({
     'x': x,
     'y': y,
-    'set': pd.cut(y, bins=4, right=False)
+    'set': pd.cut(y, bins=n, right=False)
 })
-sets['s'] = sets.groupby('set')['y'].transform('mean')
-plt.fill_between(sets['x'], sets['s'], alpha=0.2)
-plt.plot(sets['x'], sets['y'])
+sets['s'] = sets.groupby('set')['y'].transform('max')
+
+fig, ax = plt.subplots(1, 1, figsize=(7, 4))
+ax.fill_between(sets['x'], sets['s'], alpha=0.1, color='black', edgecolor='none')
+ax.plot(sets['x'], sets['s'], alpha=0.4, color='black', label=r'$\varphi_{' + str(n) + r'}\,(\omega)$')
+ax.plot(sets['x'], sets['y'], color='black', label=r'$f\,(\omega)$')
+ax.set_ylabel('Valor da função')
+ax.set_xlabel('$\omega$')
+ax.legend()
+
 # %%
