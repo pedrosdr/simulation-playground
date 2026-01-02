@@ -7,8 +7,8 @@ import matplotlib.pyplot as plt
 x = np.linspace(0, 15, 1000)
 y = np.where(
     ((x >= 0) & (x < 3)) | ((x >= 11) & (x <= 15)), 1, np.where(
-    (x >= 3) & (x < 5),                           2, np.where(
-    (x >= 5) & (x < 11),                        1.5, 0
+    (x >= 3) & (x < 5),                             2, np.where(
+    (x >= 5) & (x < 11),                          1.5, 0
 )))
 plt.plot(x, y)
 
