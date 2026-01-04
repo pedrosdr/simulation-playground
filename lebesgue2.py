@@ -15,7 +15,9 @@ plt.plot(x, y)
 # %%
 x = np.linspace(0, 10, 1000)
 # y = 2.5-0.1*(x-5)**2
-y = 1+np.sin(x)
+# y = 1+np.sin(x)
+y = 1+np.sin(x)+0.3*x
+print(max(y))
 
 fig, ax = plt.subplots(1, 1, figsize=(6, 3), dpi=300)
 ax.plot(x, y, color='black')
