@@ -14,21 +14,36 @@ class LinearRWF(nn.Module):
             mu=0.5, sigma=0.1
         ):
         super().__init__()
-        W = nn.init.xavier_normal_(th.empty([out_features, in_features]))
-        self.s = nn.Parameter(mu + th.randn(out_features)*sigma)
+        W = nn.init.xavier_normal_(th.empty([out_features, in_features], dtype=th.float32))
+        self.s = nn.Parameter(mu + th.randn(out_features, dtype=th.float32)*sigma)
         self.V = nn.Parameter(th.exp(-self.s).unsqueeze(1)*W)
-        self.bias = nn.Parameter(th.zeros(out_features))
+        self.bias = nn.Parameter(th.zeros(out_features, dtype=th.float32))
     
     def forward(self, x):
         x = x @ self.V.t()
         return x * th.exp(self.s).unsqueeze(0) + self.bias.unsqueeze(0)
 
-#%%
+
+class RFF(nn.Module):
+    def __init__(self, in_features, out_features, sigma=5):
+        super().__init__()
+        if out_features % 2 != 0:
+            raise ValueError('out_features must be even')
+        m = out_features//2
+        B = th.randn([m, in_features], dtype=th.float32) * sigma
+        self.register_buffer('B', B)
+
+    def forward(self, x):
+        x = x@self.B.t()
+        return th.cat([th.sin(x), th.cos(x)], dim=-1)
+
+
 class Net(nn.Module):
     def __init__(self):
         super().__init__()
         self.nn = nn.Sequential(
-            LinearRWF(2, 10),
+            RFF(2, 10),
+            LinearRWF(10, 10),
             nn.Tanh(),
             LinearRWF(10, 1)
         )
@@ -50,9 +65,9 @@ net = Net().to(device)
 optim = th.optim.Adam(net.parameters(), 0.001)
 criterion = nn.MSELoss()
 dataset = th.utils.data.TensorDataset(X, y_t)
-loader = th.utils.data.DataLoader(dataset, batch_size=10)
+loader = th.utils.data.DataLoader(dataset, batch_size=10, shuffle=True)
 
-for i in range(1000):
+for i in range(100):
     for inputs, targets in loader:
         inputs = inputs.to(device)
         targets = targets.to(device)
