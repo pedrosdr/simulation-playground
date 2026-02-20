@@ -1,0 +1,52 @@
+#%%
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# %%
+x = np.random.randn(100)*3 + 20
+
+# %%
+X = np.stack([
+    0.2*x + np.random.randn(len(x)),
+    -0.7*x + np.random.randn(len(x)),
+    0.05*x + np.random.randn(len(x))
+], axis=1)
+X
+
+# %%
+Xc = (X - np.mean(X, axis=0, keepdims=True))
+Xc
+
+# %%
+Cov = (1/(Xc.shape[0]-1)) * Xc.T@Xc
+Cov
+
+# %%
+eigvals, eigvecs = np.linalg.eigh(Cov)
+print(eigvals)
+print(eigvecs)
+
+# %%
+idx = np.argsort(-eigvals)
+eigvals = eigvals[idx]
+eigvecs = eigvecs[:,idx]
+eigvals
+
+#%%
+Z = Xc@eigvecs
+Z
+
+# %%
+from sklearn.decomposition import PCA
+prcomps = PCA(3).fit_transform(X)
+prcomps
+
+# %%
+ang1 = 30*2*np.pi/360
+a = np.array([1,0], dtype=float)
+b = np.array([np.cos(np.pi/4), np.sin(np.pi/4)])
+
+#%%
+b@b
+# %%
