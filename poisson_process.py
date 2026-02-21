@@ -2,7 +2,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import poisson
-from math import factorial
 
 # %%
 T = 1000
@@ -15,4 +14,5 @@ incr = poisson.ppf(
 )
 n = incr.cumsum()
 plt.plot(t, n)
+
 # %%
