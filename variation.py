@@ -24,3 +24,28 @@ for size in [10_000, 100_000, 1_000_000]:
 plt.plot(part, f)
 
 # %%
+# Quadratic Variation
+x = np.linspace(0, 1, 100_000)
+y = 0.5*x
+plt.plot(x, y)
+
+V = np.sum(np.abs(np.diff(y)))
+print('Variation =', V)
+QV = np.sum(np.square(np.diff(y)))
+print('Quadratic variation = ', QV)
+
+# %%
+# Brownian Motion
+# The quadratic variation of a Brownian
+# motion in the interval [a, b] is b-a
+t = np.linspace(0, 2, 100_000)
+dt = t[1]-t[0]
+B = np.cumsum(np.random.randn(len(t))*np.sqrt(dt))
+plt.plot(t, B)
+
+V = np.sum(np.abs(np.diff(B)))
+print('Variation =', V)
+QV = np.sum(np.square(np.diff(B)))
+print('Quadratic variation = ', QV)
+
+#%%
