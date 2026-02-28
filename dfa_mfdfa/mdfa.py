@@ -78,7 +78,7 @@ def fluctuation(scale):
 scales=th.unique(
     th.logspace(
         th.log10(th.tensor(10.0)), 
-        th.log10(th.tensor(x.shape[0]//4)),
+        th.log10(th.tensor(x.shape[0]//4).to(x.dtype)),
         200
     ).round()
 ).to(int)
