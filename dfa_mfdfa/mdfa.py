@@ -100,6 +100,7 @@ def dfa(signal, q=2):
     log_scales = th.log10(scales.to(x.dtype))
     log_F = th.log10(F.to(x.dtype))
     _, betas = polyfit(log_scales, log_F, deg=1)
+    plt.plot(log_scales, log_F)
     return betas[1].item()
 
 # %%
@@ -112,5 +113,5 @@ plt.plot(x)
 
 # %%
 qs = [-3, -2, -1, 1, 2, 3]
-plt.plot(qs, [dfa(x, q=q) for q in qs])
+res = [dfa(x, q=q) for q in qs]
 # %%
