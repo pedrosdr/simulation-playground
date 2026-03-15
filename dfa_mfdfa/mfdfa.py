@@ -93,7 +93,7 @@ def dfa(signal, q=2):
         th.logspace(
             th.log10(th.tensor(10.0)), 
             th.log10(th.tensor(x.shape[0]//4).to(x.dtype)),
-            200
+            20
         ).round()
     ).to(int)
     F = th.stack([fluctuation(scale, x, q=q) for scale in scales])
@@ -114,4 +114,5 @@ plt.plot(x)
 # %%
 qs = [-3, -2, -1, 1, 2, 3]
 res = [dfa(x, q=q) for q in qs]
+
 # %%
