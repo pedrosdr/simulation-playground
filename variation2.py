@@ -25,5 +25,9 @@ plt.plot(W)
 #%%
 V = np.sum(np.abs(W[1:]-W[:-1]))
 Q = np.sum(np.square(W[1:]-W[:-1]))
-V,Q
+C = np.sum(np.power(W[1:]-W[:-1], 3))
+V,Q,C
 # %%
+plt.plot(np.cumsum(W[1:]-W[:-1]))
+plt.plot(np.cumsum((W[1:]-W[:-1])**2))
+plt.plot(np.cumsum((W[1:]-W[:-1])**3))
