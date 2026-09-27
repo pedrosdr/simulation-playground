@@ -30,7 +30,197 @@ DEFAULT_TICKERS = [
     'SAPR11.SA'
 ]
 
+DEFAULT_YEARS = 5
+DEFAULT_RF = 13.0
+DEFAULT_MAX_WEIGHT = 100.0
+DEFAULT_MAX_ITER = 2000
+DEFAULT_SIMULATIONS = 50_000
+DEFAULT_SEED = None
+DEFAULT_PLOT = False
+
 TRADING_DAYS = 252
+
+
+# ============================================================
+# Terminal colors
+# ============================================================
+
+GREEN = '\033[92m'
+RED = '\033[91m'
+YELLOW = '\033[93m'
+RESET = '\033[0m'
+
+
+# ============================================================
+# JSON configuration
+# ============================================================
+
+def load_config(path):
+
+    path = Path(path).expanduser()
+
+    if not path.is_file():
+        raise ValueError(
+            f'Configuration file not found: {path}'
+        )
+
+    try:
+        with path.open(
+            'r',
+            encoding='utf-8'
+        ) as file:
+            data = json.load(file)
+
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f'Invalid JSON in configuration file '
+            f'{path}: {exc}'
+        ) from exc
+
+    if not isinstance(data, dict):
+        raise ValueError(
+            'Configuration JSON must contain a JSON object.'
+        )
+
+    key_map = {
+        'years': 'years',
+        'rf': 'rf',
+
+        'max-weight': 'max_weight',
+        'max_weight': 'max_weight',
+
+        'max-iter': 'max_iter',
+        'max_iter': 'max_iter',
+
+        'simulations': 'simulations',
+
+        'seed': 'seed',
+
+        'plot': 'show_plot',
+        'show-plot': 'show_plot',
+        'show_plot': 'show_plot',
+
+        'tickers': 'tickers'
+    }
+
+    config = {}
+
+    for key, value in data.items():
+
+        if key not in key_map:
+            raise ValueError(
+                f'Unknown configuration parameter: {key}'
+            )
+
+        normalized_key = key_map[key]
+
+        if normalized_key in config:
+            raise ValueError(
+                f'Duplicate configuration parameter: {key}'
+            )
+
+        config[normalized_key] = value
+
+    # --------------------------------------------------------
+    # Validation
+    # --------------------------------------------------------
+
+    if 'years' in config:
+
+        if (
+            isinstance(config['years'], bool)
+            or not isinstance(config['years'], int)
+            or config['years'] <= 0
+        ):
+            raise ValueError(
+                '"years" must be a positive integer.'
+            )
+
+    if 'rf' in config:
+
+        if (
+            isinstance(config['rf'], bool)
+            or not isinstance(
+                config['rf'],
+                (int, float)
+            )
+        ):
+            raise ValueError(
+                '"rf" must be numeric.'
+            )
+
+    if 'max_weight' in config:
+
+        value = config['max_weight']
+
+        if (
+            isinstance(value, bool)
+            or not isinstance(
+                value,
+                (int, float)
+            )
+            or not 0 < value <= 100
+        ):
+            raise ValueError(
+                '"max-weight" must be greater than 0 '
+                'and at most 100.'
+            )
+
+    if 'max_iter' in config:
+
+        if (
+            isinstance(config['max_iter'], bool)
+            or not isinstance(
+                config['max_iter'],
+                int
+            )
+            or config['max_iter'] <= 0
+        ):
+            raise ValueError(
+                '"max-iter" must be a positive integer.'
+            )
+
+    if 'simulations' in config:
+
+        if (
+            isinstance(config['simulations'], bool)
+            or not isinstance(
+                config['simulations'],
+                int
+            )
+            or config['simulations'] <= 0
+        ):
+            raise ValueError(
+                '"simulations" must be a positive integer.'
+            )
+
+    if 'seed' in config:
+
+        if (
+            config['seed'] is not None
+            and (
+                isinstance(config['seed'], bool)
+                or not isinstance(
+                    config['seed'],
+                    int
+                )
+            )
+        ):
+            raise ValueError(
+                '"seed" must be an integer or null.'
+            )
+
+    if 'show_plot' in config:
+
+        if not isinstance(
+            config['show_plot'],
+            bool
+        ):
+            raise ValueError(
+                '"plot" must be true or false.'
+            )
+
+    return config, path
 
 
 # ============================================================
@@ -39,29 +229,82 @@ TRADING_DAYS = 252
 
 def parse_args():
 
+    # --------------------------------------------------------
+    # Parse --config first
+    # --------------------------------------------------------
+
+    pre_parser = argparse.ArgumentParser(
+        add_help=False
+    )
+
+    pre_parser.add_argument(
+        '-c',
+        '--config',
+        type=str,
+        default=None
+    )
+
+    pre_args, _ = pre_parser.parse_known_args()
+
+    # --------------------------------------------------------
+    # Load configuration
+    # --------------------------------------------------------
+
+    config = {}
+    config_path = None
+
+    if pre_args.config is not None:
+
+        try:
+            config, config_path = load_config(
+                pre_args.config
+            )
+
+        except ValueError as exc:
+            raise SystemExit(
+                f'Error: {exc}'
+            ) from exc
+
+    # --------------------------------------------------------
+    # Main parser
+    #
+    # Priority:
+    # defaults < config JSON < command line
+    # --------------------------------------------------------
+
     parser = argparse.ArgumentParser(
         description=(
-            'Markowitz portfolio optimization using SciPy. '
-            'Finds the maximum Sharpe ratio portfolio '
-            'and the minimum variance portfolio.'
+            'Markowitz portfolio optimization using SciPy.'
         ),
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=(
+            argparse.ArgumentDefaultsHelpFormatter
+        ),
         epilog=(
             'Examples:\n'
             '  py markowitz.py\n'
-            '  py markowitz.py --tickers PETR4.SA TAEE11.SA ITUB3.SA\n'
-            '  py markowitz.py --tickers example_1.json\n'
-            '  py markowitz.py --tickers example_2.json --plot\n'
-            '  py markowitz.py --years 10 --rf 11.5 '
-            '--max-weight 25 --plot'
+            '  py markowitz.py --config portfolio.json\n'
+            '  py markowitz.py --config portfolio.json --rf 12\n'
+            '  py markowitz.py --tickers PETR4.SA ITUB3.SA VALE3.SA\n'
+            '  py markowitz.py --tickers portfolio.json --plot\n'
         )
+    )
+
+    parser.add_argument(
+        '-c',
+        '--config',
+        type=str,
+        default=pre_args.config,
+        help='JSON configuration file'
     )
 
     parser.add_argument(
         '-y',
         '--years',
         type=int,
-        default=5,
+        default=config.get(
+            'years',
+            DEFAULT_YEARS
+        ),
         help='Number of years of historical data'
     )
 
@@ -69,7 +312,10 @@ def parse_args():
         '-r',
         '--rf',
         type=float,
-        default=13.0,
+        default=config.get(
+            'rf',
+            DEFAULT_RF
+        ),
         help='Annual risk-free rate in percent'
     )
 
@@ -77,45 +323,43 @@ def parse_args():
         '-t',
         '--tickers',
         nargs='+',
-        default=DEFAULT_TICKERS,
+        default=None,
         help=(
-            'Ticker symbols separated by spaces, or a single '
-            'path to a JSON file. A JSON list supplies tickers '
-            'only; a JSON object supplies ticker:weight pairs '
-            'for a provided portfolio.'
+            'Ticker symbols separated by spaces, '
+            'or a path to a ticker JSON file'
         )
     )
 
     parser.add_argument(
         '--max-weight',
         type=float,
-        default=100.0,
+        default=config.get(
+            'max_weight',
+            DEFAULT_MAX_WEIGHT
+        ),
         help='Maximum optimized weight per asset in percent'
     )
 
     parser.add_argument(
         '--max-iter',
         type=int,
-        default=2000,
+        default=config.get(
+            'max_iter',
+            DEFAULT_MAX_ITER
+        ),
         help='Maximum number of optimizer iterations'
-    )
-
-    parser.add_argument(
-        '-p',
-        '--plot',
-        '--show-plot',
-        dest='show_plot',
-        action='store_true',
-        help='Show the portfolio risk-return plot'
     )
 
     parser.add_argument(
         '-n',
         '--simulations',
         type=int,
-        default=50_000,
+        default=config.get(
+            'simulations',
+            DEFAULT_SIMULATIONS
+        ),
         help=(
-            'Number of random portfolios used only '
+            'Number of random portfolios used '
             'for plot visualization'
         )
     )
@@ -123,11 +367,44 @@ def parse_args():
     parser.add_argument(
         '--seed',
         type=int,
-        default=None,
+        default=config.get(
+            'seed',
+            DEFAULT_SEED
+        ),
         help='Random seed for plot reproducibility'
     )
 
+    plot_group = (
+        parser.add_mutually_exclusive_group()
+    )
+
+    plot_group.add_argument(
+        '-p',
+        '--plot',
+        dest='show_plot',
+        action='store_true',
+        help='Show portfolio risk-return plot'
+    )
+
+    plot_group.add_argument(
+        '--no-plot',
+        dest='show_plot',
+        action='store_false',
+        help='Disable plot'
+    )
+
+    parser.set_defaults(
+        show_plot=config.get(
+            'show_plot',
+            DEFAULT_PLOT
+        )
+    )
+
     args = parser.parse_args()
+
+    # --------------------------------------------------------
+    # Validation
+    # --------------------------------------------------------
 
     if args.years <= 0:
         parser.error(
@@ -150,225 +427,242 @@ def parse_args():
             'and less than or equal to 100.'
         )
 
-    return args
-
-
-# ============================================================
-# Ticker / JSON input
-# ============================================================
-
-def load_ticker_input(ticker_args):
-    """
-    Returns
-    -------
-    tickers : list[str]
-        Tickers to download.
-
-    provided_weights_raw : dict[str, float] | None
-        Raw portfolio weights when a JSON object is supplied.
-
-    source : str
-        Description of the ticker source.
-    """
-
     # --------------------------------------------------------
-    # A single .json argument is interpreted as a JSON file
+    # Ticker source
     # --------------------------------------------------------
 
-    if len(ticker_args) == 1:
+    if args.tickers is not None:
 
-        candidate = Path(
-            ticker_args[0]
-        ).expanduser()
+        ticker_spec = args.tickers
+        ticker_source = 'Command line'
 
-        if candidate.suffix.lower() == '.json':
+    elif 'tickers' in config:
 
-            if not candidate.is_file():
-                raise ValueError(
-                    f'Ticker JSON file not found: {candidate}'
-                )
+        ticker_spec = config['tickers']
 
-            try:
-
-                with candidate.open(
-                    'r',
-                    encoding='utf-8'
-                ) as file:
-
-                    data = json.load(file)
-
-            except json.JSONDecodeError as exc:
-
-                raise ValueError(
-                    f'Invalid JSON in {candidate}: {exc}'
-                ) from exc
-
-            # =================================================
-            # JSON format 1:
-            #
-            # [
-            #     "PETR4.SA",
-            #     "TAEE11.SA",
-            #     "ITUB3.SA"
-            # ]
-            # =================================================
-
-            if isinstance(data, list):
-
-                if len(data) < 2:
-                    raise ValueError(
-                        'Ticker JSON list must contain '
-                        'at least two tickers.'
-                    )
-
-                if not all(
-                    isinstance(ticker, str)
-                    and ticker.strip()
-                    for ticker in data
-                ):
-
-                    raise ValueError(
-                        'Every item in the ticker JSON list '
-                        'must be a non-empty string.'
-                    )
-
-                tickers = [
-                    ticker.strip()
-                    for ticker in data
-                ]
-
-                if len(set(tickers)) != len(tickers):
-
-                    raise ValueError(
-                        'Ticker JSON list contains '
-                        'duplicate tickers.'
-                    )
-
-                return (
-                    tickers,
-                    None,
-                    str(candidate)
-                )
-
-            # =================================================
-            # JSON format 2:
-            #
-            # {
-            #     "PETR4.SA": 200.3,
-            #     "TAEE11.SA": 21.2,
-            #     "ITUB3.SA": 55.5
-            # }
-            # =================================================
-
-            if isinstance(data, dict):
-
-                if len(data) < 2:
-
-                    raise ValueError(
-                        'Ticker JSON object must contain '
-                        'at least two tickers.'
-                    )
-
-                provided_weights_raw = {}
-
-                for ticker, weight in data.items():
-
-                    if (
-                        not isinstance(ticker, str)
-                        or not ticker.strip()
-                    ):
-
-                        raise ValueError(
-                            'Every JSON object key must '
-                            'be a non-empty ticker string.'
-                        )
-
-                    if (
-                        isinstance(weight, bool)
-                        or not isinstance(
-                            weight,
-                            (int, float)
-                        )
-                    ):
-
-                        raise ValueError(
-                            f'Weight for {ticker} '
-                            'must be numeric.'
-                        )
-
-                    weight = float(weight)
-
-                    if not np.isfinite(weight):
-
-                        raise ValueError(
-                            f'Weight for {ticker} '
-                            'must be finite.'
-                        )
-
-                    if weight < 0:
-
-                        raise ValueError(
-                            f'Weight for {ticker} '
-                            'cannot be negative.'
-                        )
-
-                    provided_weights_raw[
-                        ticker.strip()
-                    ] = weight
-
-                if (
-                    sum(
-                        provided_weights_raw.values()
-                    )
-                    <= 0
-                ):
-
-                    raise ValueError(
-                        'The sum of provided portfolio '
-                        'weights must be greater than zero.'
-                    )
-
-                tickers = list(
-                    provided_weights_raw.keys()
-                )
-
-                return (
-                    tickers,
-                    provided_weights_raw,
-                    str(candidate)
-                )
-
-            raise ValueError(
-                'Ticker JSON must be either a list '
-                'of ticker strings or an object '
-                'containing ticker:weight pairs.'
-            )
-
-    # --------------------------------------------------------
-    # Normal command-line tickers
-    # --------------------------------------------------------
-
-    tickers = [
-        ticker.strip()
-        for ticker in ticker_args
-    ]
-
-    if len(tickers) < 2:
-
-        raise ValueError(
-            'At least two tickers are required.'
+        ticker_source = (
+            f'Configuration file: {config_path}'
         )
 
-    if len(set(tickers)) != len(tickers):
+    else:
 
-        raise ValueError(
-            'Duplicate tickers are not allowed.'
-        )
+        ticker_spec = DEFAULT_TICKERS
+        ticker_source = 'Default tickers'
 
     return (
-        tickers,
-        None,
-        'Command line'
+        args,
+        ticker_spec,
+        ticker_source,
+        config_path
+    )
+
+
+# ============================================================
+# Parse ticker data
+# ============================================================
+
+def parse_ticker_data(
+    data,
+    source
+):
+
+    # --------------------------------------------------------
+    # List of tickers
+    # --------------------------------------------------------
+
+    if isinstance(data, list):
+
+        if len(data) < 2:
+            raise ValueError(
+                'At least two tickers are required.'
+            )
+
+        if not all(
+            isinstance(ticker, str)
+            and ticker.strip()
+            for ticker in data
+        ):
+            raise ValueError(
+                'Every ticker must be a non-empty string.'
+            )
+
+        tickers = [
+            ticker.strip()
+            for ticker in data
+        ]
+
+        if len(set(tickers)) != len(tickers):
+            raise ValueError(
+                'Duplicate tickers are not allowed.'
+            )
+
+        return (
+            tickers,
+            None,
+            source
+        )
+
+    # --------------------------------------------------------
+    # Dictionary:
+    # ticker -> current monetary value
+    # --------------------------------------------------------
+
+    if isinstance(data, dict):
+
+        if len(data) < 2:
+            raise ValueError(
+                'At least two tickers are required.'
+            )
+
+        values = {}
+
+        for ticker, value in data.items():
+
+            if (
+                not isinstance(ticker, str)
+                or not ticker.strip()
+            ):
+                raise ValueError(
+                    'Every ticker must be a non-empty string.'
+                )
+
+            if (
+                isinstance(value, bool)
+                or not isinstance(
+                    value,
+                    (int, float)
+                )
+            ):
+                raise ValueError(
+                    f'Value for {ticker} must be numeric.'
+                )
+
+            value = float(value)
+
+            if not np.isfinite(value):
+                raise ValueError(
+                    f'Value for {ticker} must be finite.'
+                )
+
+            if value < 0:
+                raise ValueError(
+                    f'Value for {ticker} cannot be negative.'
+                )
+
+            values[ticker.strip()] = value
+
+        if sum(values.values()) <= 0:
+            raise ValueError(
+                'Provided portfolio values must sum '
+                'to a value greater than zero.'
+            )
+
+        return (
+            list(values.keys()),
+            values,
+            source
+        )
+
+    raise ValueError(
+        'Tickers must be either a list '
+        'or an object containing ticker:value pairs.'
+    )
+
+
+# ============================================================
+# Load standalone ticker JSON
+# ============================================================
+
+def load_ticker_json(path):
+
+    path = Path(path).expanduser()
+
+    if not path.is_file():
+        raise ValueError(
+            f'Ticker JSON file not found: {path}'
+        )
+
+    try:
+
+        with path.open(
+            'r',
+            encoding='utf-8'
+        ) as file:
+
+            data = json.load(file)
+
+    except json.JSONDecodeError as exc:
+
+        raise ValueError(
+            f'Invalid JSON in {path}: {exc}'
+        ) from exc
+
+    return parse_ticker_data(
+        data,
+        f'Ticker JSON: {path}'
+    )
+
+
+# ============================================================
+# Resolve ticker specification
+# ============================================================
+
+def resolve_tickers(
+    ticker_spec,
+    ticker_source
+):
+
+    if isinstance(
+        ticker_spec,
+        (dict, list)
+    ):
+
+        # ----------------------------------------------------
+        # A single-item list may be a JSON path
+        # ----------------------------------------------------
+
+        if (
+            isinstance(ticker_spec, list)
+            and len(ticker_spec) == 1
+            and isinstance(
+                ticker_spec[0],
+                str
+            )
+            and Path(
+                ticker_spec[0]
+            ).suffix.lower() == '.json'
+        ):
+
+            return load_ticker_json(
+                ticker_spec[0]
+            )
+
+        return parse_ticker_data(
+            ticker_spec,
+            ticker_source
+        )
+
+    # --------------------------------------------------------
+    # JSON path supplied as a string in configuration
+    # --------------------------------------------------------
+
+    if isinstance(
+        ticker_spec,
+        str
+    ):
+
+        path = Path(
+            ticker_spec
+        ).expanduser()
+
+        if path.suffix.lower() == '.json':
+
+            return load_ticker_json(
+                path
+            )
+
+    raise ValueError(
+        'Invalid ticker specification.'
     )
 
 
@@ -377,41 +671,41 @@ def load_ticker_input(ticker_args):
 # ============================================================
 
 def normalize_provided_weights(
-    provided_weights_raw,
+    raw_values,
     columns
 ):
 
-    if provided_weights_raw is None:
+    if raw_values is None:
         return None
 
-    raw = np.array(
+    values = np.array(
         [
-            provided_weights_raw[ticker]
+            raw_values[ticker]
             for ticker in columns
         ],
         dtype=float
     )
 
-    total = raw.sum()
+    total = values.sum()
 
     if total <= 0:
-
         raise ValueError(
-            'The sum of provided portfolio '
-            'weights must be greater than zero.'
+            'Provided portfolio values '
+            'must sum to a positive value.'
         )
 
-    return raw / total
+    return values / total
 
 
 # ============================================================
-# Configuration output
+# Print configuration
 # ============================================================
 
 def print_configuration(
     args,
     tickers,
     ticker_source,
+    config_path,
     has_provided_portfolio
 ):
 
@@ -420,57 +714,62 @@ def print_configuration(
     print('----------------------')
 
     print(
-        f'Years:                    '
+        f'{"Configuration file:":<30}'
+        f'{config_path if config_path else "None"}'
+    )
+
+    print(
+        f'{"Years:":<30}'
         f'{args.years}'
     )
 
     print(
-        f'Risk-free rate:           '
+        f'{"Risk-free rate:":<30}'
         f'{args.rf:.2f} %'
     )
 
     print(
-        f'Maximum optimized weight: '
+        f'{"Maximum optimized weight:":<30}'
         f'{args.max_weight:.2f} %'
     )
 
     print(
-        f'Optimizer:                '
+        f'{"Optimizer:":<30}'
         f'SLSQP'
     )
 
     print(
-        f'Max optimizer iterations: '
+        f'{"Max optimizer iterations:":<30}'
         f'{args.max_iter:,}'
     )
 
     print(
-        f'Show plot:                '
+        f'{"Show plot:":<30}'
         f'{"Yes" if args.show_plot else "No"}'
     )
 
     print(
-        f'Plot simulations:         '
+        f'{"Plot simulations:":<30}'
         f'{args.simulations:,}'
     )
 
     print(
-        f'Random seed:              '
+        f'{"Random seed:":<30}'
         f'{args.seed if args.seed is not None else "Random"}'
     )
 
     print(
-        f'Ticker source:            '
+        f'{"Ticker source:":<30}'
         f'{ticker_source}'
     )
 
     print(
-        f'Provided portfolio:       '
+        f'{"Provided portfolio:":<30}'
         f'{"Yes" if has_provided_portfolio else "No"}'
     )
 
     print(
-        f'Assets:                   '
+        f'{"Assets:":<30}'
         f'{len(tickers)}'
     )
 
@@ -575,13 +874,13 @@ def optimize_portfolios(
 
         raise ValueError(
             'Maximum weight constraint is infeasible. '
-            f'With {n_assets} assets, --max-weight '
-            f'must be at least '
+            f'With {n_assets} assets, '
+            f'--max-weight must be at least '
             f'{minimum_required:.2f} %.'
         )
 
     # --------------------------------------------------------
-    # Sum of weights = 1
+    # Sum(weights) = 1
     # --------------------------------------------------------
 
     constraints = (
@@ -673,7 +972,7 @@ def optimize_portfolios(
     ]
 
     # --------------------------------------------------------
-    # Return-oriented initial portfolio
+    # Return-oriented starting point
     # --------------------------------------------------------
 
     w_return = np.zeros(
@@ -748,7 +1047,7 @@ def optimize_portfolios(
 
 
 # ============================================================
-# Portfolio output
+# Standard portfolio output
 # ============================================================
 
 def print_portfolio(
@@ -782,47 +1081,402 @@ def print_portfolio(
     print('-' * len(title))
 
     portfolio = sorted(
-
         zip(
             tickers,
             weights
         ),
-
         key=lambda x:
             x[1],
-
         reverse=True
+    )
+
+    ticker_width = max(
+        len('Ticker'),
+        max(
+            len(ticker)
+            for ticker in tickers
+        )
+    )
+
+    print(
+        f'{"Ticker":<{ticker_width}}  '
+        f'{"Weight":<12}'
+    )
+
+    print(
+        '-' * (
+            ticker_width + 14
+        )
     )
 
     for ticker, weight in portfolio:
 
-        # Avoid "-0.00 %"
         weight = max(
             0.0,
             weight
         )
 
-        print(
-            f'{ticker}: '
+        weight_text = (
             f'{100 * weight:.2f} %'
+        )
+
+        print(
+            f'{ticker:<{ticker_width}}  '
+            f'{weight_text:<12}'
         )
 
     print()
 
     print(
-        f'Expected return: '
+        f'{"Expected return:":<20}'
         f'{100 * expected_return:.2f} %'
     )
 
     print(
-        f'Risk:            '
+        f'{"Risk:":<20}'
         f'{100 * risk:.2f} %'
     )
 
     print(
-        f'Sharpe ratio:    '
+        f'{"Sharpe ratio:":<20}'
         f'{sharpe:.3f}'
     )
+
+
+# ============================================================
+# Provided portfolio + rebalancing output
+# ============================================================
+
+def print_provided_portfolio(
+    title,
+    raw_values,
+    current_weights,
+    target_weights,
+    tickers,
+    mu,
+    covariance,
+    rf
+):
+
+    # --------------------------------------------------------
+    # Current portfolio statistics
+    # --------------------------------------------------------
+
+    expected_return = portfolio_return(
+        current_weights,
+        mu
+    )
+
+    risk = portfolio_risk(
+        current_weights,
+        covariance
+    )
+
+    sharpe = portfolio_sharpe(
+        current_weights,
+        mu,
+        covariance,
+        rf
+    )
+
+    # --------------------------------------------------------
+    # Current monetary values
+    # --------------------------------------------------------
+
+    current_values = np.array(
+        [
+            raw_values[ticker]
+            for ticker in tickers
+        ],
+        dtype=float
+    )
+
+    total_value = (
+        current_values.sum()
+    )
+
+    # --------------------------------------------------------
+    # Target monetary values
+    # --------------------------------------------------------
+
+    target_values = (
+        target_weights
+        * total_value
+    )
+
+    # --------------------------------------------------------
+    # Required trades
+    # --------------------------------------------------------
+
+    delta_values = (
+        target_values
+        - current_values
+    )
+
+    delta_weights = (
+        target_weights
+        - current_weights
+    )
+
+    # --------------------------------------------------------
+    # Rows
+    # --------------------------------------------------------
+
+    portfolio = sorted(
+        zip(
+            tickers,
+            current_weights,
+            target_weights,
+            current_values,
+            target_values,
+            delta_weights,
+            delta_values
+        ),
+        key=lambda x:
+            x[1],
+        reverse=True
+    )
+
+    # --------------------------------------------------------
+    # Column widths
+    # --------------------------------------------------------
+
+    ticker_width = max(
+        len('Ticker'),
+        max(
+            len(ticker)
+            for ticker in tickers
+        )
+    )
+
+    current_width = 12
+    target_width = 12
+    action_width = 8
+    amount_width = 14
+    delta_width = 12
+
+    # --------------------------------------------------------
+    # Header
+    # --------------------------------------------------------
+
+    print()
+    print(title)
+    print('-' * len(title))
+
+    header = (
+        f'{"Ticker":<{ticker_width}}  '
+        f'{"Current":<{current_width}}'
+        f'{"Target":<{target_width}}'
+        f'{"Action":<{action_width}}'
+        f'{"Amount":<{amount_width}}'
+        f'{"Δ Weight":<{delta_width}}'
+    )
+
+    print(header)
+    print('-' * len(header))
+
+    # --------------------------------------------------------
+    # Trades
+    # --------------------------------------------------------
+
+    total_buy = 0.0
+    total_sell = 0.0
+
+    for (
+        ticker,
+        current_weight,
+        target_weight,
+        current_value,
+        target_value,
+        delta_weight,
+        delta_value
+
+    ) in portfolio:
+
+        tolerance = 1e-8
+
+        if delta_value > tolerance:
+
+            action = 'BUY'
+            color = GREEN
+
+            total_buy += delta_value
+
+        elif delta_value < -tolerance:
+
+            action = 'SELL'
+            color = RED
+
+            total_sell += abs(
+                delta_value
+            )
+
+        else:
+
+            action = 'HOLD'
+            color = YELLOW
+
+        current_text = (
+            f'{100 * current_weight:.2f} %'
+        )
+
+        target_text = (
+            f'{100 * target_weight:.2f} %'
+        )
+
+        amount_text = (
+            f'{abs(delta_value):,.2f}'
+        )
+
+        delta_text = (
+            f'{100 * delta_weight:+.2f} pp'
+        )
+
+        print(
+            f'{ticker:<{ticker_width}}  '
+            f'{current_text:<{current_width}}'
+            f'{target_text:<{target_width}}',
+            end=''
+        )
+
+        print(
+            f'{color}'
+            f'{action:<{action_width}}'
+            f'{RESET}',
+            end=''
+        )
+
+        print(
+            f'{color}'
+            f'{amount_text:<{amount_width}}'
+            f'{RESET}',
+            end=''
+        )
+
+        print(
+            f'{delta_text:<{delta_width}}'
+        )
+
+    # --------------------------------------------------------
+    # Summary
+    # --------------------------------------------------------
+
+    print()
+
+    print(
+        f'{"Portfolio value:":<20}'
+        f'{total_value:,.2f}'
+    )
+
+    print(
+        f'{"Total BUY:":<20}'
+        f'{GREEN}'
+        f'{total_buy:,.2f}'
+        f'{RESET}'
+    )
+
+    print(
+        f'{"Total SELL:":<20}'
+        f'{RED}'
+        f'{total_sell:,.2f}'
+        f'{RESET}'
+    )
+
+    print()
+
+    print(
+        f'{"Expected return:":<20}'
+        f'{100 * expected_return:.2f} %'
+    )
+
+    print(
+        f'{"Risk:":<20}'
+        f'{100 * risk:.2f} %'
+    )
+
+    print(
+        f'{"Sharpe ratio:":<20}'
+        f'{sharpe:.3f}'
+    )
+
+
+# ============================================================
+# Enforce maximum weight
+# ============================================================
+
+def enforce_max_weight(
+    weights,
+    max_weight
+):
+
+    if max_weight >= 1.0:
+        return weights
+
+    # --------------------------------------------------------
+    # Iteratively redistribute weights that exceed
+    # the maximum allowed weight.
+    # --------------------------------------------------------
+
+    weights = weights.copy()
+
+    for _ in range(100):
+
+        excess = np.maximum(
+            weights - max_weight,
+            0.0
+        )
+
+        excess_sum = excess.sum(
+            axis=1
+        )
+
+        mask = (
+            excess_sum > 1e-12
+        )
+
+        if not np.any(mask):
+            break
+
+        weights = np.minimum(
+            weights,
+            max_weight
+        )
+
+        capacity = np.maximum(
+            max_weight - weights,
+            0.0
+        )
+
+        capacity_sum = capacity.sum(
+            axis=1
+        )
+
+        valid = (
+            mask
+            & (capacity_sum > 1e-12)
+        )
+
+        if not np.any(valid):
+            break
+
+        weights[valid] += (
+            capacity[valid]
+            * (
+                excess_sum[valid]
+                / capacity_sum[valid]
+            )[:, None]
+        )
+
+    # --------------------------------------------------------
+    # Numerical normalization
+    # --------------------------------------------------------
+
+    weights /= weights.sum(
+        axis=1,
+        keepdims=True
+    )
+
+    return weights
 
 
 # ============================================================
@@ -836,58 +1490,85 @@ def generate_random_weights(
     max_weight
 ):
 
-    weights = rng.dirichlet(
-        np.ones(n_assets),
-        size=n_portfolios
-    )
-
-    if max_weight >= 1.0:
-        return weights
-
     # --------------------------------------------------------
-    # Clip portfolios that violate max_weight
-    # and redistribute the excess.
+    # Exactly n_portfolios are generated.
     #
-    # Used only for plot visualization.
+    # Each portfolio receives its own Dirichlet concentration
+    # parameter.
+    #
+    # Small alpha -> portfolios closer to edges/corners.
+    # Alpha near 1 -> portfolios more toward the interior.
+    #
+    # Beta(1, 3) favors smaller values, therefore the cloud
+    # contains more points near the boundaries while still
+    # filling the interior.
     # --------------------------------------------------------
 
-    excess = np.maximum(
-        weights - max_weight,
-        0.0
+    alpha = (
+        0.10
+        + 0.90
+        * rng.beta(
+            1.0,
+            3.0,
+            size=n_portfolios
+        )
     )
 
-    excess_sum = np.sum(
-        excess,
-        axis=1
+    # --------------------------------------------------------
+    # Dirichlet with one alpha per portfolio.
+    #
+    # Dirichlet can be generated through Gamma variables:
+    #
+    # x_i ~ Gamma(alpha, 1)
+    #
+    # w_i = x_i / sum(x)
+    # --------------------------------------------------------
+
+    gamma_samples = rng.gamma(
+        shape=alpha[:, None],
+        scale=1.0,
+        size=(
+            n_portfolios,
+            n_assets
+        )
     )
 
-    weights = np.minimum(
+    # --------------------------------------------------------
+    # Protect against extremely rare numerical underflow
+    # --------------------------------------------------------
+
+    row_sums = gamma_samples.sum(
+        axis=1,
+        keepdims=True
+    )
+
+    invalid_rows = (
+        row_sums[:, 0] <= 0
+    )
+
+    if np.any(invalid_rows):
+
+        gamma_samples[
+            invalid_rows
+        ] = 1.0
+
+        row_sums = gamma_samples.sum(
+            axis=1,
+            keepdims=True
+        )
+
+    weights = (
+        gamma_samples
+        / row_sums
+    )
+
+    # --------------------------------------------------------
+    # Respect max-weight constraint
+    # --------------------------------------------------------
+
+    weights = enforce_max_weight(
         weights,
         max_weight
-    )
-
-    capacity = np.maximum(
-        max_weight - weights,
-        0.0
-    )
-
-    capacity_sum = np.sum(
-        capacity,
-        axis=1
-    )
-
-    mask = (
-        excess_sum > 0
-    )
-
-    weights[mask] += (
-
-        capacity[mask]
-
-        * (
-            excess_sum[mask]
-            / capacity_sum[mask]
-        )[:, None]
     )
 
     return weights
@@ -913,23 +1594,27 @@ def plot_portfolios(
     n_assets = len(mu)
 
     # --------------------------------------------------------
-    # Random portfolios for visualization
+    # Exactly "simulations" portfolios
     # --------------------------------------------------------
 
     weights = generate_random_weights(
-
         rng=rng,
-
         n_portfolios=simulations,
-
         n_assets=n_assets,
-
         max_weight=max_weight
     )
+
+    # --------------------------------------------------------
+    # Portfolio expected returns
+    # --------------------------------------------------------
 
     random_returns = (
         weights @ mu
     )
+
+    # --------------------------------------------------------
+    # Portfolio variances
+    # --------------------------------------------------------
 
     random_variances = np.einsum(
         'ij,jk,ik->i',
@@ -942,37 +1627,49 @@ def plot_portfolios(
         random_variances
     )
 
+    # --------------------------------------------------------
+    # Sharpe ratios
+    # --------------------------------------------------------
+
     random_sharpes = (
         (random_returns - rf)
         / random_risks
     )
 
     # --------------------------------------------------------
-    # Maximum Sharpe portfolio
+    # Maximum Sharpe Portfolio
     # --------------------------------------------------------
 
-    max_sharpe_return = portfolio_return(
-        w_max_sharpe,
-        mu
+    max_sharpe_return = (
+        portfolio_return(
+            w_max_sharpe,
+            mu
+        )
     )
 
-    max_sharpe_risk = portfolio_risk(
-        w_max_sharpe,
-        covariance
+    max_sharpe_risk = (
+        portfolio_risk(
+            w_max_sharpe,
+            covariance
+        )
     )
 
     # --------------------------------------------------------
-    # Minimum Variance portfolio
+    # Minimum Variance Portfolio
     # --------------------------------------------------------
 
-    min_var_return = portfolio_return(
-        w_min_var,
-        mu
+    min_var_return = (
+        portfolio_return(
+            w_min_var,
+            mu
+        )
     )
 
-    min_var_risk = portfolio_risk(
-        w_min_var,
-        covariance
+    min_var_risk = (
+        portfolio_risk(
+            w_min_var,
+            covariance
+        )
     )
 
     # --------------------------------------------------------
@@ -984,15 +1681,10 @@ def plot_portfolios(
     )
 
     scatter = plt.scatter(
-
         100 * random_risks,
-
         100 * random_returns,
-
         c=random_sharpes,
-
         s=5,
-
         alpha=0.35
     )
 
@@ -1006,17 +1698,11 @@ def plot_portfolios(
     # --------------------------------------------------------
 
     plt.scatter(
-
         100 * max_sharpe_risk,
-
         100 * max_sharpe_return,
-
         color='red',
-
         s=130,
-
         label='Maximum Sharpe',
-
         zorder=3
     )
 
@@ -1025,17 +1711,11 @@ def plot_portfolios(
     # --------------------------------------------------------
 
     plt.scatter(
-
         100 * min_var_risk,
-
         100 * min_var_return,
-
         color='blue',
-
         s=130,
-
         label='Minimum Variance',
-
         zorder=3
     )
 
@@ -1045,31 +1725,48 @@ def plot_portfolios(
 
     if provided_weights is not None:
 
-        provided_return = portfolio_return(
-            provided_weights,
-            mu
+        provided_return = (
+            portfolio_return(
+                provided_weights,
+                mu
+            )
         )
 
-        provided_risk = portfolio_risk(
-            provided_weights,
-            covariance
+        provided_risk = (
+            portfolio_risk(
+                provided_weights,
+                covariance
+            )
         )
 
         plt.scatter(
-
             100 * provided_risk,
-
             100 * provided_return,
-
             color='green',
-
             marker='D',
-
             s=140,
-
             label='Provided Portfolio',
-
             zorder=4
+        )
+
+        # ----------------------------------------------------
+        # Direction toward Maximum Sharpe Portfolio
+        # ----------------------------------------------------
+
+        plt.annotate(
+            '',
+            xy=(
+                100 * max_sharpe_risk,
+                100 * max_sharpe_return
+            ),
+            xytext=(
+                100 * provided_risk,
+                100 * provided_return
+            ),
+            arrowprops={
+                'arrowstyle': '->',
+                'linestyle': '--'
+            }
         )
 
     # --------------------------------------------------------
@@ -1077,21 +1774,21 @@ def plot_portfolios(
     # --------------------------------------------------------
 
     plt.plot(
-
         [
             0,
             100 * max_sharpe_risk
         ],
-
         [
             100 * rf,
             100 * max_sharpe_return
         ],
-
         color='red',
-
         linestyle='dotted'
     )
+
+    # --------------------------------------------------------
+    # Formatting
+    # --------------------------------------------------------
 
     plt.xlabel(
         'Annualized Risk (%)'
@@ -1119,21 +1816,28 @@ def plot_portfolios(
 
 def main():
 
-    args = parse_args()
+    (
+        args,
+        ticker_spec,
+        ticker_source,
+        config_path
+
+    ) = parse_args()
 
     # --------------------------------------------------------
-    # Load tickers / optional provided portfolio
+    # Resolve ticker input
     # --------------------------------------------------------
 
     try:
 
         (
             tickers,
-            provided_weights_raw,
+            provided_values_raw,
             ticker_source
 
-        ) = load_ticker_input(
-            args.tickers
+        ) = resolve_tickers(
+            ticker_spec,
+            ticker_source
         )
 
     except ValueError as exc:
@@ -1147,21 +1851,18 @@ def main():
     # --------------------------------------------------------
 
     print_configuration(
-
         args=args,
-
         tickers=tickers,
-
         ticker_source=ticker_source,
-
+        config_path=config_path,
         has_provided_portfolio=(
-            provided_weights_raw
+            provided_values_raw
             is not None
         )
     )
 
     # --------------------------------------------------------
-    # Random number generator
+    # RNG
     # --------------------------------------------------------
 
     rng = np.random.default_rng(
@@ -1169,7 +1870,7 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Date range
+    # Historical period
     # --------------------------------------------------------
 
     end = date.today()
@@ -1182,7 +1883,7 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Download data
+    # Download prices
     # --------------------------------------------------------
 
     print(
@@ -1191,20 +1892,11 @@ def main():
     )
 
     stocks = yf.download(
-
         tickers=tickers,
-
         start=start,
-
         end=end,
-
         auto_adjust=True
-
     )['Close']
-
-    # --------------------------------------------------------
-    # Remove completely unavailable columns
-    # --------------------------------------------------------
 
     stocks = stocks.dropna(
         axis=1,
@@ -1212,15 +1904,12 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Check missing tickers
+    # Missing tickers
     # --------------------------------------------------------
 
     missing_tickers = [
-
         ticker
-
         for ticker in tickers
-
         if ticker not in stocks.columns
     ]
 
@@ -1234,7 +1923,7 @@ def main():
         )
 
     # --------------------------------------------------------
-    # Preserve requested / JSON ticker order
+    # Preserve ticker order
     # --------------------------------------------------------
 
     stocks = (
@@ -1250,14 +1939,12 @@ def main():
         )
 
     # --------------------------------------------------------
-    # Normalize supplied portfolio weights
+    # Normalize provided portfolio
     # --------------------------------------------------------
 
     provided_weights = (
         normalize_provided_weights(
-
-            provided_weights_raw,
-
+            provided_values_raw,
             stocks.columns
         )
     )
@@ -1275,9 +1962,6 @@ def main():
 
     # --------------------------------------------------------
     # Annualized expected returns
-    #
-    # Internally:
-    # 0.20 = 20%
     # --------------------------------------------------------
 
     mu = (
@@ -1289,7 +1973,7 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Annualized covariance matrix
+    # Annualized covariance
     # --------------------------------------------------------
 
     covariance = (
@@ -1298,29 +1982,13 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Risk-free rate
-    #
-    # CLI:
-    # --rf 13
-    #
-    # Internal:
-    # 0.13
+    # Convert percentages to decimal
     # --------------------------------------------------------
 
     rf = (
         args.rf
         / 100
     )
-
-    # --------------------------------------------------------
-    # Maximum optimized weight
-    #
-    # CLI:
-    # --max-weight 25
-    #
-    # Internal:
-    # 0.25
-    # --------------------------------------------------------
 
     max_weight = (
         args.max_weight
@@ -1339,15 +2007,10 @@ def main():
         w_min_var
 
     ) = optimize_portfolios(
-
         mu=mu,
-
         covariance=covariance,
-
         rf=rf,
-
         max_weight=max_weight,
-
         max_iter=args.max_iter
     )
 
@@ -1356,17 +2019,11 @@ def main():
     # ========================================================
 
     print_portfolio(
-
         title='Maximum Sharpe Ratio Portfolio',
-
         weights=w_max_sharpe,
-
         tickers=stocks.columns,
-
         mu=mu,
-
         covariance=covariance,
-
         rf=rf
     )
 
@@ -1375,17 +2032,11 @@ def main():
     # ========================================================
 
     print_portfolio(
-
         title='Minimum Variance Portfolio',
-
         weights=w_min_var,
-
         tickers=stocks.columns,
-
         mu=mu,
-
         covariance=covariance,
-
         rf=rf
     )
 
@@ -1398,23 +2049,43 @@ def main():
     print('---------------------------------')
 
     individual_returns = sorted(
-
         zip(
             stocks.columns,
             100 * mu
         ),
-
         key=lambda x:
             x[1],
-
         reverse=True
+    )
+
+    ticker_width = max(
+        len('Ticker'),
+        max(
+            len(ticker)
+            for ticker in stocks.columns
+        )
+    )
+
+    print(
+        f'{"Ticker":<{ticker_width}}  '
+        f'{"Expected Return":<18}'
+    )
+
+    print(
+        '-' * (
+            ticker_width + 20
+        )
     )
 
     for ticker, expected_return in individual_returns:
 
-        print(
-            f'{ticker}: '
+        expected_return_text = (
             f'{expected_return:.2f} %'
+        )
+
+        print(
+            f'{ticker:<{ticker_width}}  '
+            f'{expected_return_text:<18}'
         )
 
     # ========================================================
@@ -1426,13 +2097,10 @@ def main():
     print('----------------------')
 
     individual_risks = (
-
         100
-
         * np.sqrt(
             TRADING_DAYS
         )
-
         * np.std(
             r,
             axis=0,
@@ -1441,46 +2109,54 @@ def main():
     )
 
     sorted_risks = sorted(
-
         zip(
             stocks.columns,
             individual_risks
         ),
-
         key=lambda x:
             x[1],
-
         reverse=True
+    )
+
+    print(
+        f'{"Ticker":<{ticker_width}}  '
+        f'{"Risk":<12}'
+    )
+
+    print(
+        '-' * (
+            ticker_width + 14
+        )
     )
 
     for ticker, risk in sorted_risks:
 
-        print(
-            f'{ticker}: '
+        risk_text = (
             f'{risk:.2f} %'
         )
 
+        print(
+            f'{ticker:<{ticker_width}}  '
+            f'{risk_text:<12}'
+        )
+
     # ========================================================
-    # 5. Provided Portfolio
+    # 5. Provided Portfolio + Rebalancing
     # ========================================================
 
     if provided_weights is not None:
 
-        print_portfolio(
-
+        print_provided_portfolio(
             title=(
                 'Provided Portfolio '
-                '— Normalized Weights'
+                '— Rebalancing to Maximum Sharpe'
             ),
-
-            weights=provided_weights,
-
+            raw_values=provided_values_raw,
+            current_weights=provided_weights,
+            target_weights=w_max_sharpe,
             tickers=stocks.columns,
-
             mu=mu,
-
             covariance=covariance,
-
             rf=rf
         )
 
@@ -1491,25 +2167,15 @@ def main():
     if args.show_plot:
 
         plot_portfolios(
-
             rng=rng,
-
             simulations=args.simulations,
-
             mu=mu,
-
             covariance=covariance,
-
             rf=rf,
-
             w_max_sharpe=w_max_sharpe,
-
             w_min_var=w_min_var,
-
             max_weight=max_weight,
-
             years=args.years,
-
             provided_weights=provided_weights
         )
 
