@@ -1,6 +1,7 @@
 # %%
 import argparse
 import json
+import sys
 from datetime import date
 from pathlib import Path
 
@@ -52,32 +53,554 @@ RESET = '\033[0m'
 
 
 # ============================================================
+# Contextual help texts
+# ============================================================
+
+TICKERS_HELP = """
+--tickers / -t
+===============
+
+Specifies the assets used by the portfolio analysis.
+
+Accepted formats:
+
+
+1. Tickers directly on the command line
+----------------------------------------
+
+    py markowitz.py -t PETR4.SA VALE3.SA ITUB3.SA
+
+or:
+
+    py markowitz.py --tickers PETR4.SA VALE3.SA ITUB3.SA
+
+
+2. JSON containing a ticker list
+---------------------------------
+
+Example: tickers.json
+
+[
+    "PETR4.SA",
+    "VALE3.SA",
+    "BBAS3.SA",
+    "ITUB3.SA"
+]
+
+Run:
+
+    py markowitz.py -t tickers.json
+
+
+3. JSON containing a current portfolio
+---------------------------------------
+
+Example: portfolio.json
+
+{
+    "PETR4.SA": 2840.65,
+    "VALE3.SA": 1935.20,
+    "BBAS3.SA": 1376.80,
+    "ITUB3.SA": 842.45
+}
+
+Run:
+
+    py markowitz.py -t portfolio.json
+
+
+Portfolio values
+----------------
+
+When ticker:value pairs are supplied, values are interpreted as the
+current monetary value of each position.
+
+They do not need to sum to 1 or 100.
+
+The program automatically normalizes them into portfolio weights.
+
+Example:
+
+    PETR4.SA = 2840.65
+    VALE3.SA = 1935.20
+    BBAS3.SA = 1376.80
+    ITUB3.SA = 842.45
+
+Total:
+
+    6995.10
+
+Each position is divided by the total to calculate its current weight.
+
+
+Provided portfolio analysis
+---------------------------
+
+When monetary values are provided, the program also calculates:
+
+    - current portfolio weights;
+    - expected return;
+    - risk;
+    - Sharpe ratio;
+    - Maximum Sharpe target weights;
+    - BUY / SELL / HOLD operations;
+    - monetary amount to buy or sell;
+    - weight difference in percentage points.
+
+
+Validation
+----------
+
+    - At least two tickers are required.
+    - Duplicate tickers are not allowed.
+    - Position values must be numeric.
+    - Position values cannot be negative.
+    - Total portfolio value must be greater than zero.
+"""
+
+
+CONFIG_HELP = """
+--config / -c
+=============
+
+Loads parameters from a JSON configuration file.
+
+Run:
+
+    py markowitz.py -c config.json
+
+or:
+
+    py markowitz.py --config config.json
+
+
+Precedence
+----------
+
+Configuration values are resolved in this order:
+
+    defaults < configuration JSON < command line
+
+Therefore command-line parameters override configuration parameters.
+
+
+Example
+-------
+
+config.json:
+
+{
+    "years": 6,
+    "rf": 10.60
+}
+
+Command:
+
+    py markowitz.py -c config.json --rf 9.90
+
+Effective risk-free rate:
+
+    9.90 %
+
+
+Supported keys
+--------------
+
+years
+    Number of years of historical data.
+
+rf
+    Annual risk-free rate in percent.
+
+max-weight
+max_weight
+    Maximum allowed weight per asset in optimized portfolios,
+    expressed in percent.
+
+max-iter
+max_iter
+    Maximum number of SLSQP optimizer iterations.
+
+simulations
+    Number of simulated portfolios displayed in the graph.
+
+seed
+    Random seed used for plot reproducibility.
+
+plot
+show-plot
+show_plot
+    Enables or disables the graph.
+
+tickers
+    May contain:
+
+        - ticker list;
+        - ticker:value current portfolio;
+        - path to another ticker JSON file.
+
+
+Complete example
+----------------
+
+{
+    "years": 6,
+    "rf": 10.60,
+    "max-weight": 40.0,
+    "max-iter": 2500,
+    "simulations": 50000,
+    "seed": 31415,
+    "plot": true,
+    "tickers": {
+        "PETR4.SA": 2840.65,
+        "VALE3.SA": 1935.20,
+        "BBAS3.SA": 1376.80,
+        "CMIG4.SA": 1188.35,
+        "ITSA4.SA": 1043.90,
+        "TAEE11.SA": 916.70,
+        "CPFE3.SA": 773.55,
+        "PSSA3.SA": 621.40,
+        "ITUB3.SA": 842.45,
+        "WEGE3.SA": 468.25,
+        "SAPR11.SA": 296.10,
+        "SOJA3.SA": 157.80
+    }
+}
+
+
+Configuration with ticker list
+------------------------------
+
+{
+    "years": 4,
+    "rf": 9.80,
+    "max-weight": 35.0,
+    "plot": true,
+    "tickers": [
+        "PETR4.SA",
+        "VALE3.SA",
+        "BBAS3.SA",
+        "ITUB3.SA"
+    ]
+}
+
+
+Configuration referencing a ticker JSON
+---------------------------------------
+
+{
+    "years": 8,
+    "rf": 10.25,
+    "max-weight": 30.0,
+    "tickers": "tickers.json"
+}
+"""
+
+
+YEARS_HELP = """
+--years / -y
+============
+
+Number of years of historical market data.
+
+Example:
+
+    py markowitz.py --years 7
+
+The value must be a positive integer.
+
+Default:
+
+    5
+"""
+
+
+RF_HELP = """
+--rf / -r
+=========
+
+Annual risk-free rate expressed in percent.
+
+Example:
+
+    py markowitz.py --rf 10.25
+
+means:
+
+    10.25 %
+
+Internally this is converted to:
+
+    0.1025
+
+The risk-free rate is used when calculating the Sharpe ratio.
+
+Default:
+
+    13.0 %
+"""
+
+
+MAX_WEIGHT_HELP = """
+--max-weight
+============
+
+Maximum percentage allowed for one asset in an optimized portfolio.
+
+Example:
+
+    py markowitz.py --max-weight 35
+
+means:
+
+    weight_i <= 35 %
+
+The constraint applies to:
+
+    - Maximum Sharpe portfolio;
+    - Minimum Variance portfolio;
+    - simulated portfolios.
+
+It does not modify the current Provided Portfolio.
+
+The constraint must be feasible.
+
+For N assets:
+
+    N * max_weight >= 100 %
+
+Example:
+
+With 5 assets, max-weight must be at least:
+
+    20 %
+"""
+
+
+MAX_ITER_HELP = """
+--max-iter
+==========
+
+Maximum number of iterations allowed for SLSQP.
+
+Example:
+
+    py markowitz.py --max-iter 3000
+
+Used by:
+
+    - Maximum Sharpe optimization;
+    - Minimum Variance optimization.
+
+Default:
+
+    2000
+"""
+
+
+SIMULATIONS_HELP = """
+--simulations / -n
+==================
+
+Number of random portfolios used in the risk-return graph.
+
+Example:
+
+    py markowitz.py --simulations 50000
+
+This generates exactly:
+
+    50,000 simulated portfolios.
+
+These simulations are used only for visualization.
+
+Maximum Sharpe and Minimum Variance portfolios are calculated
+independently with SLSQP.
+
+The random-weight distribution favors lower Dirichlet concentration
+parameters, producing more points near the edges of the feasible
+portfolio region while retaining points in the interior.
+
+Default:
+
+    50,000
+"""
+
+
+SEED_HELP = """
+--seed
+======
+
+Random seed used by the portfolio simulation.
+
+Example:
+
+    py markowitz.py --seed 12345
+
+The same seed produces the same simulated portfolio cloud.
+
+Without --seed, a new random sequence is generated.
+
+The seed does not affect the SLSQP optimization.
+"""
+
+
+PLOT_HELP = """
+--plot / -p
+===========
+
+Displays the portfolio risk-return graph.
+
+Example:
+
+    py markowitz.py --plot
+
+The graph contains:
+
+    - simulated portfolios;
+    - Sharpe ratio color scale;
+    - Maximum Sharpe portfolio;
+    - Minimum Variance portfolio;
+    - Provided Portfolio, when supplied;
+    - arrow from Provided Portfolio toward Maximum Sharpe;
+    - Capital Allocation Line.
+
+Command-line values override the configuration JSON.
+
+Example:
+
+    py markowitz.py -c config.json --plot
+"""
+
+
+NO_PLOT_HELP = """
+--no-plot
+=========
+
+Explicitly disables the graph.
+
+Useful when the configuration contains:
+
+    "plot": true
+
+Example:
+
+    py markowitz.py -c config.json --no-plot
+
+Command-line parameters override configuration values.
+"""
+
+
+ARGUMENT_HELP = {
+    '-t': TICKERS_HELP,
+    '--tickers': TICKERS_HELP,
+
+    '-c': CONFIG_HELP,
+    '--config': CONFIG_HELP,
+
+    '-y': YEARS_HELP,
+    '--years': YEARS_HELP,
+
+    '-r': RF_HELP,
+    '--rf': RF_HELP,
+
+    '--max-weight': MAX_WEIGHT_HELP,
+    '--max-iter': MAX_ITER_HELP,
+
+    '-n': SIMULATIONS_HELP,
+    '--simulations': SIMULATIONS_HELP,
+
+    '--seed': SEED_HELP,
+
+    '-p': PLOT_HELP,
+    '--plot': PLOT_HELP,
+
+    '--no-plot': NO_PLOT_HELP
+}
+
+
+# ============================================================
+# Contextual argument help
+# ============================================================
+
+def handle_contextual_help():
+
+    args = sys.argv[1:]
+
+    help_flags = {
+        '-h',
+        '--help'
+    }
+
+    # --------------------------------------------------------
+    # Detect patterns such as:
+    #
+    # -t -h
+    # -t --help
+    # --tickers -h
+    # --tickers --help
+    #
+    # before argparse sees them.
+    # --------------------------------------------------------
+
+    for index, argument in enumerate(args):
+
+        if argument not in ARGUMENT_HELP:
+            continue
+
+        if (
+            index + 1 < len(args)
+            and args[index + 1] in help_flags
+        ):
+
+            print(
+                ARGUMENT_HELP[
+                    argument
+                ].strip()
+            )
+
+            raise SystemExit(0)
+
+
+# ============================================================
 # JSON configuration
 # ============================================================
 
 def load_config(path):
 
-    path = Path(path).expanduser()
+    path = Path(
+        path
+    ).expanduser()
 
     if not path.is_file():
+
         raise ValueError(
             f'Configuration file not found: {path}'
         )
 
     try:
+
         with path.open(
             'r',
             encoding='utf-8'
         ) as file:
-            data = json.load(file)
+
+            data = json.load(
+                file
+            )
 
     except json.JSONDecodeError as exc:
+
         raise ValueError(
             f'Invalid JSON in configuration file '
             f'{path}: {exc}'
         ) from exc
 
-    if not isinstance(data, dict):
+    if not isinstance(
+        data,
+        dict
+    ):
+
         raise ValueError(
             'Configuration JSON must contain a JSON object.'
         )
@@ -108,107 +631,166 @@ def load_config(path):
     for key, value in data.items():
 
         if key not in key_map:
+
             raise ValueError(
                 f'Unknown configuration parameter: {key}'
             )
 
-        normalized_key = key_map[key]
+        normalized_key = (
+            key_map[key]
+        )
 
         if normalized_key in config:
+
             raise ValueError(
                 f'Duplicate configuration parameter: {key}'
             )
 
-        config[normalized_key] = value
+        config[
+            normalized_key
+        ] = value
 
     # --------------------------------------------------------
-    # Validation
+    # Validate years
     # --------------------------------------------------------
 
     if 'years' in config:
 
         if (
-            isinstance(config['years'], bool)
-            or not isinstance(config['years'], int)
+            isinstance(
+                config['years'],
+                bool
+            )
+            or not isinstance(
+                config['years'],
+                int
+            )
             or config['years'] <= 0
         ):
+
             raise ValueError(
                 '"years" must be a positive integer.'
             )
 
+    # --------------------------------------------------------
+    # Validate risk-free rate
+    # --------------------------------------------------------
+
     if 'rf' in config:
 
         if (
-            isinstance(config['rf'], bool)
+            isinstance(
+                config['rf'],
+                bool
+            )
             or not isinstance(
                 config['rf'],
                 (int, float)
             )
         ):
+
             raise ValueError(
                 '"rf" must be numeric.'
             )
 
+    # --------------------------------------------------------
+    # Validate max weight
+    # --------------------------------------------------------
+
     if 'max_weight' in config:
 
-        value = config['max_weight']
+        value = (
+            config['max_weight']
+        )
 
         if (
-            isinstance(value, bool)
+            isinstance(
+                value,
+                bool
+            )
             or not isinstance(
                 value,
                 (int, float)
             )
             or not 0 < value <= 100
         ):
+
             raise ValueError(
                 '"max-weight" must be greater than 0 '
                 'and at most 100.'
             )
 
+    # --------------------------------------------------------
+    # Validate max iterations
+    # --------------------------------------------------------
+
     if 'max_iter' in config:
 
         if (
-            isinstance(config['max_iter'], bool)
+            isinstance(
+                config['max_iter'],
+                bool
+            )
             or not isinstance(
                 config['max_iter'],
                 int
             )
             or config['max_iter'] <= 0
         ):
+
             raise ValueError(
                 '"max-iter" must be a positive integer.'
             )
 
+    # --------------------------------------------------------
+    # Validate simulations
+    # --------------------------------------------------------
+
     if 'simulations' in config:
 
         if (
-            isinstance(config['simulations'], bool)
+            isinstance(
+                config['simulations'],
+                bool
+            )
             or not isinstance(
                 config['simulations'],
                 int
             )
             or config['simulations'] <= 0
         ):
+
             raise ValueError(
                 '"simulations" must be a positive integer.'
             )
+
+    # --------------------------------------------------------
+    # Validate seed
+    # --------------------------------------------------------
 
     if 'seed' in config:
 
         if (
             config['seed'] is not None
             and (
-                isinstance(config['seed'], bool)
+                isinstance(
+                    config['seed'],
+                    bool
+                )
                 or not isinstance(
                     config['seed'],
                     int
                 )
             )
         ):
+
             raise ValueError(
                 '"seed" must be an integer or null.'
             )
+
+    # --------------------------------------------------------
+    # Validate plot
+    # --------------------------------------------------------
 
     if 'show_plot' in config:
 
@@ -216,11 +798,15 @@ def load_config(path):
             config['show_plot'],
             bool
         ):
+
             raise ValueError(
                 '"plot" must be true or false.'
             )
 
-    return config, path
+    return (
+        config,
+        path
+    )
 
 
 # ============================================================
@@ -230,7 +816,8 @@ def load_config(path):
 def parse_args():
 
     # --------------------------------------------------------
-    # Parse --config first
+    # First pass:
+    # only find --config
     # --------------------------------------------------------
 
     pre_parser = argparse.ArgumentParser(
@@ -244,7 +831,9 @@ def parse_args():
         default=None
     )
 
-    pre_args, _ = pre_parser.parse_known_args()
+    pre_args, _ = (
+        pre_parser.parse_known_args()
+    )
 
     # --------------------------------------------------------
     # Load configuration
@@ -256,11 +845,17 @@ def parse_args():
     if pre_args.config is not None:
 
         try:
-            config, config_path = load_config(
+
+            (
+                config,
+                config_path
+
+            ) = load_config(
                 pre_args.config
             )
 
         except ValueError as exc:
+
             raise SystemExit(
                 f'Error: {exc}'
             ) from exc
@@ -268,8 +863,7 @@ def parse_args():
     # --------------------------------------------------------
     # Main parser
     #
-    # Priority:
-    # defaults < config JSON < command line
+    # General -h intentionally stays concise.
     # --------------------------------------------------------
 
     parser = argparse.ArgumentParser(
@@ -278,14 +872,6 @@ def parse_args():
         ),
         formatter_class=(
             argparse.ArgumentDefaultsHelpFormatter
-        ),
-        epilog=(
-            'Examples:\n'
-            '  py markowitz.py\n'
-            '  py markowitz.py --config portfolio.json\n'
-            '  py markowitz.py --config portfolio.json --rf 12\n'
-            '  py markowitz.py --tickers PETR4.SA ITUB3.SA VALE3.SA\n'
-            '  py markowitz.py --tickers portfolio.json --plot\n'
         )
     )
 
@@ -294,7 +880,10 @@ def parse_args():
         '--config',
         type=str,
         default=pre_args.config,
-        help='JSON configuration file'
+        help=(
+            'JSON configuration file. '
+            'Use "-c --help" for details.'
+        )
     )
 
     parser.add_argument(
@@ -305,7 +894,10 @@ def parse_args():
             'years',
             DEFAULT_YEARS
         ),
-        help='Number of years of historical data'
+        help=(
+            'Historical period in years. '
+            'Use "-y --help" for details.'
+        )
     )
 
     parser.add_argument(
@@ -316,7 +908,10 @@ def parse_args():
             'rf',
             DEFAULT_RF
         ),
-        help='Annual risk-free rate in percent'
+        help=(
+            'Annual risk-free rate in percent. '
+            'Use "-r --help" for details.'
+        )
     )
 
     parser.add_argument(
@@ -325,8 +920,8 @@ def parse_args():
         nargs='+',
         default=None,
         help=(
-            'Ticker symbols separated by spaces, '
-            'or a path to a ticker JSON file'
+            'Tickers or ticker/portfolio JSON file. '
+            'Use "-t --help" for details.'
         )
     )
 
@@ -337,7 +932,10 @@ def parse_args():
             'max_weight',
             DEFAULT_MAX_WEIGHT
         ),
-        help='Maximum optimized weight per asset in percent'
+        help=(
+            'Maximum optimized asset weight in percent. '
+            'Use "--max-weight --help" for details.'
+        )
     )
 
     parser.add_argument(
@@ -347,7 +945,10 @@ def parse_args():
             'max_iter',
             DEFAULT_MAX_ITER
         ),
-        help='Maximum number of optimizer iterations'
+        help=(
+            'Maximum optimizer iterations. '
+            'Use "--max-iter --help" for details.'
+        )
     )
 
     parser.add_argument(
@@ -359,8 +960,8 @@ def parse_args():
             DEFAULT_SIMULATIONS
         ),
         help=(
-            'Number of random portfolios used '
-            'for plot visualization'
+            'Number of simulated portfolios. '
+            'Use "-n --help" for details.'
         )
     )
 
@@ -371,7 +972,10 @@ def parse_args():
             'seed',
             DEFAULT_SEED
         ),
-        help='Random seed for plot reproducibility'
+        help=(
+            'Random seed. '
+            'Use "--seed --help" for details.'
+        )
     )
 
     plot_group = (
@@ -383,14 +987,20 @@ def parse_args():
         '--plot',
         dest='show_plot',
         action='store_true',
-        help='Show portfolio risk-return plot'
+        help=(
+            'Show portfolio graph. '
+            'Use "-p --help" for details.'
+        )
     )
 
     plot_group.add_argument(
         '--no-plot',
         dest='show_plot',
         action='store_false',
-        help='Disable plot'
+        help=(
+            'Disable portfolio graph. '
+            'Use "--no-plot --help" for details.'
+        )
     )
 
     parser.set_defaults(
@@ -400,45 +1010,60 @@ def parse_args():
         )
     )
 
-    args = parser.parse_args()
+    args = (
+        parser.parse_args()
+    )
 
     # --------------------------------------------------------
     # Validation
     # --------------------------------------------------------
 
     if args.years <= 0:
+
         parser.error(
             '--years must be greater than zero.'
         )
 
     if args.max_iter <= 0:
+
         parser.error(
             '--max-iter must be greater than zero.'
         )
 
     if args.simulations <= 0:
+
         parser.error(
             '--simulations must be greater than zero.'
         )
 
     if not 0 < args.max_weight <= 100:
+
         parser.error(
             '--max-weight must be greater than 0 '
             'and less than or equal to 100.'
         )
 
     # --------------------------------------------------------
-    # Ticker source
+    # Ticker source precedence
+    #
+    # defaults < config < command line
     # --------------------------------------------------------
 
     if args.tickers is not None:
 
-        ticker_spec = args.tickers
-        ticker_source = 'Command line'
+        ticker_spec = (
+            args.tickers
+        )
+
+        ticker_source = (
+            'Command line'
+        )
 
     elif 'tickers' in config:
 
-        ticker_spec = config['tickers']
+        ticker_spec = (
+            config['tickers']
+        )
 
         ticker_source = (
             f'Configuration file: {config_path}'
@@ -446,8 +1071,13 @@ def parse_args():
 
     else:
 
-        ticker_spec = DEFAULT_TICKERS
-        ticker_source = 'Default tickers'
+        ticker_spec = (
+            DEFAULT_TICKERS
+        )
+
+        ticker_source = (
+            'Default tickers'
+        )
 
     return (
         args,
@@ -467,21 +1097,29 @@ def parse_ticker_data(
 ):
 
     # --------------------------------------------------------
-    # List of tickers
+    # Ticker list
     # --------------------------------------------------------
 
-    if isinstance(data, list):
+    if isinstance(
+        data,
+        list
+    ):
 
         if len(data) < 2:
+
             raise ValueError(
                 'At least two tickers are required.'
             )
 
         if not all(
-            isinstance(ticker, str)
+            isinstance(
+                ticker,
+                str
+            )
             and ticker.strip()
             for ticker in data
         ):
+
             raise ValueError(
                 'Every ticker must be a non-empty string.'
             )
@@ -491,7 +1129,11 @@ def parse_ticker_data(
             for ticker in data
         ]
 
-        if len(set(tickers)) != len(tickers):
+        if (
+            len(set(tickers))
+            != len(tickers)
+        ):
+
             raise ValueError(
                 'Duplicate tickers are not allowed.'
             )
@@ -503,13 +1145,18 @@ def parse_ticker_data(
         )
 
     # --------------------------------------------------------
-    # Dictionary:
-    # ticker -> current monetary value
+    # Provided portfolio:
+    #
+    # ticker -> monetary value
     # --------------------------------------------------------
 
-    if isinstance(data, dict):
+    if isinstance(
+        data,
+        dict
+    ):
 
         if len(data) < 2:
+
             raise ValueError(
                 'At least two tickers are required.'
             )
@@ -519,39 +1166,59 @@ def parse_ticker_data(
         for ticker, value in data.items():
 
             if (
-                not isinstance(ticker, str)
+                not isinstance(
+                    ticker,
+                    str
+                )
                 or not ticker.strip()
             ):
+
                 raise ValueError(
                     'Every ticker must be a non-empty string.'
                 )
 
             if (
-                isinstance(value, bool)
+                isinstance(
+                    value,
+                    bool
+                )
                 or not isinstance(
                     value,
                     (int, float)
                 )
             ):
+
                 raise ValueError(
                     f'Value for {ticker} must be numeric.'
                 )
 
-            value = float(value)
+            value = float(
+                value
+            )
 
-            if not np.isfinite(value):
+            if not np.isfinite(
+                value
+            ):
+
                 raise ValueError(
                     f'Value for {ticker} must be finite.'
                 )
 
             if value < 0:
+
                 raise ValueError(
                     f'Value for {ticker} cannot be negative.'
                 )
 
-            values[ticker.strip()] = value
+            values[
+                ticker.strip()
+            ] = value
 
-        if sum(values.values()) <= 0:
+        if (
+            sum(values.values())
+            <= 0
+        ):
+
             raise ValueError(
                 'Provided portfolio values must sum '
                 'to a value greater than zero.'
@@ -575,9 +1242,12 @@ def parse_ticker_data(
 
 def load_ticker_json(path):
 
-    path = Path(path).expanduser()
+    path = Path(
+        path
+    ).expanduser()
 
     if not path.is_file():
+
         raise ValueError(
             f'Ticker JSON file not found: {path}'
         )
@@ -589,7 +1259,9 @@ def load_ticker_json(path):
             encoding='utf-8'
         ) as file:
 
-            data = json.load(file)
+            data = json.load(
+                file
+            )
 
     except json.JSONDecodeError as exc:
 
@@ -604,7 +1276,7 @@ def load_ticker_json(path):
 
 
 # ============================================================
-# Resolve ticker specification
+# Resolve ticker input
 # ============================================================
 
 def resolve_tickers(
@@ -612,17 +1284,24 @@ def resolve_tickers(
     ticker_source
 ):
 
+    # --------------------------------------------------------
+    # Dictionary or direct list
+    # --------------------------------------------------------
+
     if isinstance(
         ticker_spec,
         (dict, list)
     ):
 
         # ----------------------------------------------------
-        # A single-item list may be a JSON path
+        # One command-line argument ending in .json
         # ----------------------------------------------------
 
         if (
-            isinstance(ticker_spec, list)
+            isinstance(
+                ticker_spec,
+                list
+            )
             and len(ticker_spec) == 1
             and isinstance(
                 ticker_spec[0],
@@ -643,7 +1322,7 @@ def resolve_tickers(
         )
 
     # --------------------------------------------------------
-    # JSON path supplied as a string in configuration
+    # JSON path supplied from configuration
     # --------------------------------------------------------
 
     if isinstance(
@@ -655,7 +1334,10 @@ def resolve_tickers(
             ticker_spec
         ).expanduser()
 
-        if path.suffix.lower() == '.json':
+        if (
+            path.suffix.lower()
+            == '.json'
+        ):
 
             return load_ticker_json(
                 path
@@ -676,6 +1358,7 @@ def normalize_provided_weights(
 ):
 
     if raw_values is None:
+
         return None
 
     values = np.array(
@@ -686,15 +1369,21 @@ def normalize_provided_weights(
         dtype=float
     )
 
-    total = values.sum()
+    total = (
+        values.sum()
+    )
 
     if total <= 0:
+
         raise ValueError(
             'Provided portfolio values '
             'must sum to a positive value.'
         )
 
-    return values / total
+    return (
+        values
+        / total
+    )
 
 
 # ============================================================
@@ -710,8 +1399,13 @@ def print_configuration(
 ):
 
     print()
-    print('Selected Configuration')
-    print('----------------------')
+    print(
+        'Selected Configuration'
+    )
+
+    print(
+        '----------------------'
+    )
 
     print(
         f'{"Configuration file:":<30}'
@@ -774,10 +1468,15 @@ def print_configuration(
     )
 
     print()
-    print('Tickers:')
+    print(
+        'Tickers:'
+    )
 
     for ticker in tickers:
-        print(f'  {ticker}')
+
+        print(
+            f'  {ticker}'
+        )
 
     print()
 
@@ -791,7 +1490,9 @@ def portfolio_return(
     mu
 ):
 
-    return weights @ mu
+    return (
+        weights @ mu
+    )
 
 
 def portfolio_variance(
@@ -832,11 +1533,14 @@ def portfolio_sharpe(
     )
 
     if risk <= 0:
+
         return -np.inf
 
-    expected_return = portfolio_return(
-        weights,
-        mu
+    expected_return = (
+        portfolio_return(
+            weights,
+            mu
+        )
     )
 
     return (
@@ -857,10 +1561,12 @@ def optimize_portfolios(
     max_iter
 ):
 
-    n_assets = len(mu)
+    n_assets = (
+        len(mu)
+    )
 
     # --------------------------------------------------------
-    # Feasibility check
+    # Feasibility
     # --------------------------------------------------------
 
     if (
@@ -869,7 +1575,8 @@ def optimize_portfolios(
     ):
 
         minimum_required = (
-            100 / n_assets
+            100
+            / n_assets
         )
 
         raise ValueError(
@@ -879,10 +1586,6 @@ def optimize_portfolios(
             f'{minimum_required:.2f} %.'
         )
 
-    # --------------------------------------------------------
-    # Sum(weights) = 1
-    # --------------------------------------------------------
-
     constraints = (
         {
             'type': 'eq',
@@ -891,21 +1594,24 @@ def optimize_portfolios(
         },
     )
 
-    # --------------------------------------------------------
-    # 0 <= weight <= max_weight
-    # --------------------------------------------------------
-
     bounds = [
-        (0.0, max_weight)
-        for _ in range(n_assets)
+        (
+            0.0,
+            max_weight
+        )
+        for _ in range(
+            n_assets
+        )
     ]
 
     # --------------------------------------------------------
-    # Initial equal-weight portfolio
+    # Equal-weight initial point
     # --------------------------------------------------------
 
     w0 = (
-        np.ones(n_assets)
+        np.ones(
+            n_assets
+        )
         / n_assets
     )
 
@@ -916,7 +1622,7 @@ def optimize_portfolios(
     }
 
     # ========================================================
-    # Minimum Variance Portfolio
+    # Minimum Variance
     # ========================================================
 
     min_var_result = minimize(
@@ -950,10 +1656,12 @@ def optimize_portfolios(
     )
 
     # ========================================================
-    # Maximum Sharpe Ratio Portfolio
+    # Maximum Sharpe
     # ========================================================
 
-    def negative_sharpe(weights):
+    def negative_sharpe(
+        weights
+    ):
 
         return -portfolio_sharpe(
             weights,
@@ -979,20 +1687,31 @@ def optimize_portfolios(
         n_assets
     )
 
-    remaining_weight = 1.0
+    remaining_weight = (
+        1.0
+    )
 
-    for idx in np.argsort(mu)[::-1]:
+    for idx in (
+        np.argsort(mu)[::-1]
+    ):
 
         allocation = min(
             max_weight,
             remaining_weight
         )
 
-        w_return[idx] = allocation
+        w_return[
+            idx
+        ] = allocation
 
-        remaining_weight -= allocation
+        remaining_weight -= (
+            allocation
+        )
 
-        if remaining_weight <= 1e-12:
+        if (
+            remaining_weight
+            <= 1e-12
+        ):
             break
 
     starting_points.append(
@@ -1001,7 +1720,9 @@ def optimize_portfolios(
 
     sharpe_results = []
 
-    for starting_point in starting_points:
+    for starting_point in (
+        starting_points
+    ):
 
         result = minimize(
 
@@ -1059,26 +1780,37 @@ def print_portfolio(
     rf
 ):
 
-    expected_return = portfolio_return(
-        weights,
-        mu
+    expected_return = (
+        portfolio_return(
+            weights,
+            mu
+        )
     )
 
-    risk = portfolio_risk(
-        weights,
-        covariance
+    risk = (
+        portfolio_risk(
+            weights,
+            covariance
+        )
     )
 
-    sharpe = portfolio_sharpe(
-        weights,
-        mu,
-        covariance,
-        rf
+    sharpe = (
+        portfolio_sharpe(
+            weights,
+            mu,
+            covariance,
+            rf
+        )
     )
 
     print()
-    print(title)
-    print('-' * len(title))
+    print(
+        title
+    )
+
+    print(
+        '-' * len(title)
+    )
 
     portfolio = sorted(
         zip(
@@ -1105,7 +1837,8 @@ def print_portfolio(
 
     print(
         '-' * (
-            ticker_width + 14
+            ticker_width
+            + 14
         )
     )
 
@@ -1144,7 +1877,7 @@ def print_portfolio(
 
 
 # ============================================================
-# Provided portfolio + rebalancing output
+# Provided portfolio + rebalancing
 # ============================================================
 
 def print_provided_portfolio(
@@ -1158,25 +1891,27 @@ def print_provided_portfolio(
     rf
 ):
 
-    # --------------------------------------------------------
-    # Current portfolio statistics
-    # --------------------------------------------------------
-
-    expected_return = portfolio_return(
-        current_weights,
-        mu
+    expected_return = (
+        portfolio_return(
+            current_weights,
+            mu
+        )
     )
 
-    risk = portfolio_risk(
-        current_weights,
-        covariance
+    risk = (
+        portfolio_risk(
+            current_weights,
+            covariance
+        )
     )
 
-    sharpe = portfolio_sharpe(
-        current_weights,
-        mu,
-        covariance,
-        rf
+    sharpe = (
+        portfolio_sharpe(
+            current_weights,
+            mu,
+            covariance,
+            rf
+        )
     )
 
     # --------------------------------------------------------
@@ -1196,7 +1931,7 @@ def print_provided_portfolio(
     )
 
     # --------------------------------------------------------
-    # Target monetary values
+    # Maximum Sharpe monetary targets
     # --------------------------------------------------------
 
     target_values = (
@@ -1218,10 +1953,6 @@ def print_provided_portfolio(
         - current_weights
     )
 
-    # --------------------------------------------------------
-    # Rows
-    # --------------------------------------------------------
-
     portfolio = sorted(
         zip(
             tickers,
@@ -1237,10 +1968,6 @@ def print_provided_portfolio(
         reverse=True
     )
 
-    # --------------------------------------------------------
-    # Column widths
-    # --------------------------------------------------------
-
     ticker_width = max(
         len('Ticker'),
         max(
@@ -1255,13 +1982,14 @@ def print_provided_portfolio(
     amount_width = 14
     delta_width = 12
 
-    # --------------------------------------------------------
-    # Header
-    # --------------------------------------------------------
-
     print()
-    print(title)
-    print('-' * len(title))
+    print(
+        title
+    )
+
+    print(
+        '-' * len(title)
+    )
 
     header = (
         f'{"Ticker":<{ticker_width}}  '
@@ -1272,12 +2000,13 @@ def print_provided_portfolio(
         f'{"Δ Weight":<{delta_width}}'
     )
 
-    print(header)
-    print('-' * len(header))
+    print(
+        header
+    )
 
-    # --------------------------------------------------------
-    # Trades
-    # --------------------------------------------------------
+    print(
+        '-' * len(header)
+    )
 
     total_buy = 0.0
     total_sell = 0.0
@@ -1293,19 +2022,39 @@ def print_provided_portfolio(
 
     ) in portfolio:
 
-        tolerance = 1e-8
+        tolerance = (
+            1e-8
+        )
 
-        if delta_value > tolerance:
+        if (
+            delta_value
+            > tolerance
+        ):
 
-            action = 'BUY'
-            color = GREEN
+            action = (
+                'BUY'
+            )
 
-            total_buy += delta_value
+            color = (
+                GREEN
+            )
 
-        elif delta_value < -tolerance:
+            total_buy += (
+                delta_value
+            )
 
-            action = 'SELL'
-            color = RED
+        elif (
+            delta_value
+            < -tolerance
+        ):
+
+            action = (
+                'SELL'
+            )
+
+            color = (
+                RED
+            )
 
             total_sell += abs(
                 delta_value
@@ -1313,8 +2062,13 @@ def print_provided_portfolio(
 
         else:
 
-            action = 'HOLD'
-            color = YELLOW
+            action = (
+                'HOLD'
+            )
+
+            color = (
+                YELLOW
+            )
 
         current_text = (
             f'{100 * current_weight:.2f} %'
@@ -1332,12 +2086,20 @@ def print_provided_portfolio(
             f'{100 * delta_weight:+.2f} pp'
         )
 
+        # ----------------------------------------------------
+        # Uncolored columns
+        # ----------------------------------------------------
+
         print(
             f'{ticker:<{ticker_width}}  '
             f'{current_text:<{current_width}}'
             f'{target_text:<{target_width}}',
             end=''
         )
+
+        # ----------------------------------------------------
+        # Colored action
+        # ----------------------------------------------------
 
         print(
             f'{color}'
@@ -1346,12 +2108,20 @@ def print_provided_portfolio(
             end=''
         )
 
+        # ----------------------------------------------------
+        # Colored monetary amount
+        # ----------------------------------------------------
+
         print(
             f'{color}'
             f'{amount_text:<{amount_width}}'
             f'{RESET}',
             end=''
         )
+
+        # ----------------------------------------------------
+        # Uncolored delta weight
+        # ----------------------------------------------------
 
         print(
             f'{delta_text:<{delta_width}}'
@@ -1410,14 +2180,16 @@ def enforce_max_weight(
 ):
 
     if max_weight >= 1.0:
+
         return weights
 
-    # --------------------------------------------------------
-    # Iteratively redistribute weights that exceed
-    # the maximum allowed weight.
-    # --------------------------------------------------------
+    weights = (
+        weights.copy()
+    )
 
-    weights = weights.copy()
+    # --------------------------------------------------------
+    # Redistribute weights exceeding max_weight
+    # --------------------------------------------------------
 
     for _ in range(100):
 
@@ -1426,38 +2198,62 @@ def enforce_max_weight(
             0.0
         )
 
-        excess_sum = excess.sum(
-            axis=1
+        excess_sum = (
+            excess.sum(
+                axis=1
+            )
         )
 
         mask = (
-            excess_sum > 1e-12
+            excess_sum
+            > 1e-12
         )
 
-        if not np.any(mask):
+        if not np.any(
+            mask
+        ):
             break
+
+        # ----------------------------------------------------
+        # Cap excessive positions
+        # ----------------------------------------------------
 
         weights = np.minimum(
             weights,
             max_weight
         )
 
+        # ----------------------------------------------------
+        # Remaining capacity
+        # ----------------------------------------------------
+
         capacity = np.maximum(
             max_weight - weights,
             0.0
         )
 
-        capacity_sum = capacity.sum(
-            axis=1
+        capacity_sum = (
+            capacity.sum(
+                axis=1
+            )
         )
 
         valid = (
             mask
-            & (capacity_sum > 1e-12)
+            & (
+                capacity_sum
+                > 1e-12
+            )
         )
 
-        if not np.any(valid):
+        if not np.any(
+            valid
+        ):
             break
+
+        # ----------------------------------------------------
+        # Redistribute excess proportionally
+        # ----------------------------------------------------
 
         weights[valid] += (
             capacity[valid]
@@ -1471,16 +2267,20 @@ def enforce_max_weight(
     # Numerical normalization
     # --------------------------------------------------------
 
-    weights /= weights.sum(
-        axis=1,
-        keepdims=True
+    weights /= (
+        weights.sum(
+            axis=1,
+            keepdims=True
+        )
     )
 
-    return weights
+    return (
+        weights
+    )
 
 
 # ============================================================
-# Random portfolios for plot
+# Random portfolios
 # ============================================================
 
 def generate_random_weights(
@@ -1493,15 +2293,15 @@ def generate_random_weights(
     # --------------------------------------------------------
     # Exactly n_portfolios are generated.
     #
-    # Each portfolio receives its own Dirichlet concentration
-    # parameter.
+    # Each portfolio gets its own Dirichlet concentration.
     #
-    # Small alpha -> portfolios closer to edges/corners.
-    # Alpha near 1 -> portfolios more toward the interior.
+    # Smaller alpha:
+    #     more concentrated portfolios / more boundary points.
     #
-    # Beta(1, 3) favors smaller values, therefore the cloud
-    # contains more points near the boundaries while still
-    # filling the interior.
+    # Larger alpha:
+    #     more interior points.
+    #
+    # Beta(1, 3) favors smaller alpha values.
     # --------------------------------------------------------
 
     alpha = (
@@ -1515,13 +2315,7 @@ def generate_random_weights(
     )
 
     # --------------------------------------------------------
-    # Dirichlet with one alpha per portfolio.
-    #
-    # Dirichlet can be generated through Gamma variables:
-    #
-    # x_i ~ Gamma(alpha, 1)
-    #
-    # w_i = x_i / sum(x)
+    # Dirichlet generation through Gamma random variables
     # --------------------------------------------------------
 
     gamma_samples = rng.gamma(
@@ -1533,28 +2327,35 @@ def generate_random_weights(
         )
     )
 
-    # --------------------------------------------------------
-    # Protect against extremely rare numerical underflow
-    # --------------------------------------------------------
-
-    row_sums = gamma_samples.sum(
-        axis=1,
-        keepdims=True
+    row_sums = (
+        gamma_samples.sum(
+            axis=1,
+            keepdims=True
+        )
     )
+
+    # --------------------------------------------------------
+    # Extremely rare numerical underflow protection
+    # --------------------------------------------------------
 
     invalid_rows = (
-        row_sums[:, 0] <= 0
+        row_sums[:, 0]
+        <= 0
     )
 
-    if np.any(invalid_rows):
+    if np.any(
+        invalid_rows
+    ):
 
         gamma_samples[
             invalid_rows
         ] = 1.0
 
-        row_sums = gamma_samples.sum(
-            axis=1,
-            keepdims=True
+        row_sums = (
+            gamma_samples.sum(
+                axis=1,
+                keepdims=True
+            )
         )
 
     weights = (
@@ -1563,7 +2364,7 @@ def generate_random_weights(
     )
 
     # --------------------------------------------------------
-    # Respect max-weight constraint
+    # Respect maximum asset weight
     # --------------------------------------------------------
 
     weights = enforce_max_weight(
@@ -1571,7 +2372,9 @@ def generate_random_weights(
         max_weight
     )
 
-    return weights
+    return (
+        weights
+    )
 
 
 # ============================================================
@@ -1591,29 +2394,34 @@ def plot_portfolios(
     provided_weights=None
 ):
 
-    n_assets = len(mu)
+    n_assets = (
+        len(mu)
+    )
 
     # --------------------------------------------------------
     # Exactly "simulations" portfolios
     # --------------------------------------------------------
 
-    weights = generate_random_weights(
-        rng=rng,
-        n_portfolios=simulations,
-        n_assets=n_assets,
-        max_weight=max_weight
+    weights = (
+        generate_random_weights(
+            rng=rng,
+            n_portfolios=simulations,
+            n_assets=n_assets,
+            max_weight=max_weight
+        )
     )
 
     # --------------------------------------------------------
-    # Portfolio expected returns
+    # Expected returns
     # --------------------------------------------------------
 
     random_returns = (
-        weights @ mu
+        weights
+        @ mu
     )
 
     # --------------------------------------------------------
-    # Portfolio variances
+    # Variances and risks
     # --------------------------------------------------------
 
     random_variances = np.einsum(
@@ -1632,12 +2440,15 @@ def plot_portfolios(
     # --------------------------------------------------------
 
     random_sharpes = (
-        (random_returns - rf)
+        (
+            random_returns
+            - rf
+        )
         / random_risks
     )
 
     # --------------------------------------------------------
-    # Maximum Sharpe Portfolio
+    # Maximum Sharpe
     # --------------------------------------------------------
 
     max_sharpe_return = (
@@ -1655,7 +2466,7 @@ def plot_portfolios(
     )
 
     # --------------------------------------------------------
-    # Minimum Variance Portfolio
+    # Minimum Variance
     # --------------------------------------------------------
 
     min_var_return = (
@@ -1673,11 +2484,14 @@ def plot_portfolios(
     )
 
     # --------------------------------------------------------
-    # Plot
+    # Figure
     # --------------------------------------------------------
 
     plt.figure(
-        figsize=(10, 7)
+        figsize=(
+            10,
+            7
+        )
     )
 
     scatter = plt.scatter(
@@ -1694,7 +2508,7 @@ def plot_portfolios(
     )
 
     # --------------------------------------------------------
-    # Maximum Sharpe Portfolio
+    # Maximum Sharpe point
     # --------------------------------------------------------
 
     plt.scatter(
@@ -1707,7 +2521,7 @@ def plot_portfolios(
     )
 
     # --------------------------------------------------------
-    # Minimum Variance Portfolio
+    # Minimum Variance point
     # --------------------------------------------------------
 
     plt.scatter(
@@ -1720,10 +2534,13 @@ def plot_portfolios(
     )
 
     # --------------------------------------------------------
-    # Provided Portfolio
+    # Provided portfolio
     # --------------------------------------------------------
 
-    if provided_weights is not None:
+    if (
+        provided_weights
+        is not None
+    ):
 
         provided_return = (
             portfolio_return(
@@ -1750,7 +2567,7 @@ def plot_portfolios(
         )
 
         # ----------------------------------------------------
-        # Direction toward Maximum Sharpe Portfolio
+        # Direction toward Maximum Sharpe
         # ----------------------------------------------------
 
         plt.annotate(
@@ -1847,7 +2664,7 @@ def main():
         ) from exc
 
     # --------------------------------------------------------
-    # Configuration
+    # Configuration output
     # --------------------------------------------------------
 
     print_configuration(
@@ -1862,18 +2679,22 @@ def main():
     )
 
     # --------------------------------------------------------
-    # RNG
+    # Random generator
     # --------------------------------------------------------
 
-    rng = np.random.default_rng(
-        args.seed
+    rng = (
+        np.random.default_rng(
+            args.seed
+        )
     )
 
     # --------------------------------------------------------
     # Historical period
     # --------------------------------------------------------
 
-    end = date.today()
+    end = (
+        date.today()
+    )
 
     start = (
         end
@@ -1923,15 +2744,20 @@ def main():
         )
 
     # --------------------------------------------------------
-    # Preserve ticker order
+    # Preserve ticker order and common observations
     # --------------------------------------------------------
 
     stocks = (
-        stocks[tickers]
+        stocks[
+            tickers
+        ]
         .dropna()
     )
 
-    if stocks.shape[1] < 2:
+    if (
+        stocks.shape[1]
+        < 2
+    ):
 
         raise RuntimeError(
             'Could not obtain valid data '
@@ -1978,11 +2804,13 @@ def main():
 
     covariance = (
         TRADING_DAYS
-        * np.cov(r.T)
+        * np.cov(
+            r.T
+        )
     )
 
     # --------------------------------------------------------
-    # Convert percentages to decimal
+    # Percentage -> decimal
     # --------------------------------------------------------
 
     rf = (
@@ -2000,7 +2828,9 @@ def main():
     # --------------------------------------------------------
 
     print()
-    print('Optimizing portfolios...')
+    print(
+        'Optimizing portfolios...'
+    )
 
     (
         w_max_sharpe,
@@ -2015,11 +2845,13 @@ def main():
     )
 
     # ========================================================
-    # 1. Maximum Sharpe Ratio Portfolio
+    # 1. Maximum Sharpe
     # ========================================================
 
     print_portfolio(
-        title='Maximum Sharpe Ratio Portfolio',
+        title=(
+            'Maximum Sharpe Ratio Portfolio'
+        ),
         weights=w_max_sharpe,
         tickers=stocks.columns,
         mu=mu,
@@ -2028,11 +2860,13 @@ def main():
     )
 
     # ========================================================
-    # 2. Minimum Variance Portfolio
+    # 2. Minimum Variance
     # ========================================================
 
     print_portfolio(
-        title='Minimum Variance Portfolio',
+        title=(
+            'Minimum Variance Portfolio'
+        ),
         weights=w_min_var,
         tickers=stocks.columns,
         mu=mu,
@@ -2045,8 +2879,13 @@ def main():
     # ========================================================
 
     print()
-    print('Individual Asset Expected Returns')
-    print('---------------------------------')
+    print(
+        'Individual Asset Expected Returns'
+    )
+
+    print(
+        '---------------------------------'
+    )
 
     individual_returns = sorted(
         zip(
@@ -2073,11 +2912,16 @@ def main():
 
     print(
         '-' * (
-            ticker_width + 20
+            ticker_width
+            + 20
         )
     )
 
-    for ticker, expected_return in individual_returns:
+    for (
+        ticker,
+        expected_return
+
+    ) in individual_returns:
 
         expected_return_text = (
             f'{expected_return:.2f} %'
@@ -2093,8 +2937,13 @@ def main():
     # ========================================================
 
     print()
-    print('Individual Asset Risks')
-    print('----------------------')
+    print(
+        'Individual Asset Risks'
+    )
+
+    print(
+        '----------------------'
+    )
 
     individual_risks = (
         100
@@ -2125,11 +2974,16 @@ def main():
 
     print(
         '-' * (
-            ticker_width + 14
+            ticker_width
+            + 14
         )
     )
 
-    for ticker, risk in sorted_risks:
+    for (
+        ticker,
+        risk
+
+    ) in sorted_risks:
 
         risk_text = (
             f'{risk:.2f} %'
@@ -2144,7 +2998,10 @@ def main():
     # 5. Provided Portfolio + Rebalancing
     # ========================================================
 
-    if provided_weights is not None:
+    if (
+        provided_weights
+        is not None
+    ):
 
         print_provided_portfolio(
             title=(
@@ -2185,4 +3042,22 @@ def main():
 # ============================================================
 
 if __name__ == '__main__':
+
+    # --------------------------------------------------------
+    # IMPORTANT:
+    #
+    # Contextual help is processed BEFORE argparse.
+    #
+    # Therefore:
+    #
+    #   -t -h
+    #   -t --help
+    #   --tickers -h
+    #   --tickers --help
+    #
+    # never reach nargs='+'.
+    # --------------------------------------------------------
+
+    handle_contextual_help()
+
     main()
